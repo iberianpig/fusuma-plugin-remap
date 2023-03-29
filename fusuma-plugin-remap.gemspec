@@ -2,11 +2,11 @@
 
 lib = File.expand_path('lib', __dir__)
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
-require 'fusuma-plugin-remap/version'
+require 'fusuma/plugin/remap/version'
 
 Gem::Specification.new do |spec|
   spec.name = 'fusuma-plugin-remap'
-  spec.version = Fusuma::Plugin::Fusuma::Plugin::Remap::VERSION
+  spec.version = Fusuma::Plugin::Remap::VERSION
   spec.authors = ['iberianpig']
   spec.email = ['yhkyky@gmail.com']
 
@@ -24,6 +24,8 @@ The plugin is designed to integrate seamlessly with other Fusuma plugins, allowi
 
   spec.required_ruby_version = '>= 2.5.1'
   spec.add_dependency 'fusuma', '~> 2.0'
+  spec.add_dependency "revdev"
+  spec.add_dependency "ruinput"
   spec.metadata = {
     'rubygems_mfa_required' => 'true'
   }

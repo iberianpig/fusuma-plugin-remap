@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative '../lib/fusuma/plugin/remap/version'
+require_relative '../lib/fusuma/plugin/remap/remapper'
+require 'revdev'
+
+include Revdev
+
+if ARGV.length > 1
+  source_keyboards = [Revdev::EventDevice.new(ARGV.shift)]
+  internal_touchpad = Revdev::EventDevice.new(ARGV.shift)
+else
+  warn "Usage: #{$PROGRAM_NAME} /dev/input/KEYBOARD /dev/input/TOUCHPAD"
+  exit false
+end
+
+layers = {
+  default: { KEY_CAPSLOCK => KEY_LEFTCTRL }
+}
+
+Fusuma::Plugin::Remap::Remapper.new(
+  layer_reader: nil,
+  keyboard_writer: nil,
+  source_keyboards: source_keyboards,
+  internal_touchpad: internal_touchpad,
+  layers: layers
+).run
