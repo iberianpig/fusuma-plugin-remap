@@ -1,32 +1,33 @@
 # frozen_string_literal: true
 
-require_relative './input'
+require 'fusuma/plugin/remap/layer'
 
 module Fusuma
   module Plugin
     module Inputs
-      # libinput commands wrapper
-      class RemapInput < Input
-        DEFAULT_INTERVAL = 0.3
+      # Get keyboard events from remapper
+      class RemapKeyboardInput < Input
         def config_param_types
           {
             keyboard_name_patterns: [Array, String]
           }
         end
 
-        attr_reader :pid, :layer_writer
+        attr_reader :pid
 
         def initialize
           super
-          # layer change event
-          layer_reader, @layer_writer = IO.pipe
+          # pipe to send layer change events to remapper
+          layer_reader = Remap::Layer.instance.reader
+          layer_writer = Remap::Layer.instance.writer
+
           # physical keyboard input event
           @keyboard_reader, keyboard_writer = IO.pipe
 
           source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
 
           @pid = fork do
-            @layer_writer.close
+            layer_writer.close
             @keyboard_reader.close
             remapper = Remap::Remapper.new(
               layer_reader: layer_reader,
@@ -40,7 +41,7 @@ module Fusuma
         end
 
         def io
-          @reader
+          @keyboard_reader
         end
 
         # Devices to detect key presses and releases

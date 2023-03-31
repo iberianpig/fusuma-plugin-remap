@@ -16,7 +16,13 @@ else
 end
 
 layers = {
-  default: { KEY_CAPSLOCK => KEY_LEFTCTRL }
+  default: {
+    KEY_CAPSLOCK => KEY_LEFTCTRL
+  },
+  thumbsense: {
+    KEY_J => nil, KEY_K => nil,
+    KEY_F => nil, KEY_D => nil
+  }
 }
 
 Fusuma::Plugin::Remap::Remapper.new(

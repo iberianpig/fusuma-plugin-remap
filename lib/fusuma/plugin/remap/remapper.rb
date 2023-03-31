@@ -11,7 +11,7 @@ module Fusuma
           @keyboard_writer = keyboard_writer # write event to original keyboard
           @source_keyboards = source_keyboards # original keyboard
           @internal_touchpad = internal_touchpad # internal touchpad
-          @layers = layers # key mapping
+          @layers = layers # remap configuration from config.yml
         end
 
         def run
@@ -19,7 +19,7 @@ module Fusuma
 
           destroy = lambda do
             begin
-              @source_keyboards.each { keyboard.ungrab }
+              @source_keyboards.each { |kbd| kbd.ungrab }
               puts 'ungrab'
             rescue StandardError => e
               puts e.message
@@ -72,19 +72,23 @@ module Fusuma
               keyboard = @source_keyboards.first
               ie = keyboard.read_input_event
 
-              # TODO: change layer
-              mapping = @layers[:default]
-              remapped_key = mapping[ie.code] || ie.code
-              remapped_event = InputEvent.new(ie.time, ie.type, remapped_key, ie.value)
-
-              len = @uinput.write_input_event(remapped_event)
-
               # FIXME: exit when RIGHTCTRL-LEFTCTRL is pressed
               if (old_ie&.code == KEY_RIGHTCTRL && old_ie.value != 0) && (ie.code == KEY_LEFTCTRL && ie.value != 0)
                 destroy.call
               end
-
               old_ie = ie if ie.type == EV_KEY
+
+              # TODO: change layer
+              # layer_name = @layer_reader.gets
+              layer_name = :thumbsense
+              mapping = @layers[layer_name]
+              remapped_key = mapping.fetch(ie.code, ie.code)
+
+              next unless remapped_key
+
+              remapped_event = InputEvent.new(ie.time, ie.type, remapped_key, ie.value)
+
+              len = @uinput.write_input_event(remapped_event)
               puts "type:#{ie.hr_type}(#{ie.type})\tcode:#{ie.hr_code}(#{ie.code})\tvalue:#{ie.value} (#{len})"
             end
           rescue StandardError => e
