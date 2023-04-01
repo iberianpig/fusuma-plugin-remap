@@ -2,11 +2,12 @@ module Fusuma
   module Plugin
     module Remap
       class Layer
-        require 'singleton'
+        require "singleton"
         include Singleton
         attr_reader :reader, :writer
 
         def initialize
+          @context = {}
           @reader, @writer = IO.pipe
         end
 

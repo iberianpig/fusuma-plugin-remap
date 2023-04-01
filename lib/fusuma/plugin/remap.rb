@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative 'remap/version'
+require_relative "remap/version"
 
 module Fusuma
   module Plugin

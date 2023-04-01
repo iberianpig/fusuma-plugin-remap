@@ -1,9 +1,9 @@
-require 'ruinput'
+require "ruinput"
 
 class RuinputDevicePatched < Ruinput::UinputDevice
   include Ruinput
   def set_all_events
-    raise 'invalid method call: this uinput is already created' if @is_created
+    raise "invalid method call: this uinput is already created" if @is_created
 
     mouse_btns = [
       Revdev::BTN_0,
@@ -23,7 +23,7 @@ class RuinputDevicePatched < Ruinput::UinputDevice
       Revdev::BTN_RIGHT
     ].freeze
 
-    keyboard_keys = Revdev.constants.select { |c| c.start_with? 'KEY_' }.map { |c| Revdev.const_get(c) }.freeze
+    keyboard_keys = Revdev.constants.select { |c| c.start_with? "KEY_" }.map { |c| Revdev.const_get(c) }.freeze
 
     @file.ioctl UI_SET_EVBIT, Revdev::EV_KEY
     (Revdev::KEY_RESERVED...Revdev::KEY_CNT).each do |n|
@@ -38,7 +38,7 @@ class RuinputDevicePatched < Ruinput::UinputDevice
     #   @file.ioctl UI_SET_MSCBIT, i
     # end
 
-    # kernel bug: device has min == max on ABS_Y 
+    # kernel bug: device has min == max on ABS_Y
     # @file.ioctl UI_SET_EVBIT, Revdev::EV_ABS
     # Revdev::ABS_CNT.times do |i|
     #   @file.ioctl UI_SET_ABSBIT, i

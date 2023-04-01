@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'fusuma/plugin/remap/layer'
+require "fusuma/plugin/remap/layer"
 
 module Fusuma
   module Plugin
