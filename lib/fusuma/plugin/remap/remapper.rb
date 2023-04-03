@@ -55,13 +55,18 @@ module Fusuma
                 }
               )
 
-            sleep 1
             @source_keyboards.each do |keyboard|
-              # FIXME: release all keys
-              # keyboard.keys.each do |key|
-              #   keyboard.write_input_event(InputEvent.new(Time.now, EV_KEY, key, 0))
-              # end
-              keyboard.grab
+              loop do
+                # key status if all bytes are 0, the key is not pressed
+                bytes = keyboard.read_ioctl_with(Revdev::EVIOCGKEY)
+                if bytes.unpack("C*").all? { |byte| byte == 0 }
+                  keyboard.grab
+                  break
+                else
+                  # wait until all keys are released
+                  keyboard.read_input_event
+                end
+              end
             end
             old_ie = nil
 
