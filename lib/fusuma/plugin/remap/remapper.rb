@@ -1,4 +1,6 @@
 require "revdev"
+require "msgpack"
+require "set"
 require_relative "./ruinput_device_patched"
 
 module Fusuma
@@ -6,12 +8,15 @@ module Fusuma
     module Remap
       class Remapper
         include Revdev
-        def initialize(layer_reader:, keyboard_writer:, source_keyboards:, internal_touchpad:, layers: nil)
-          @layer_reader = layer_reader # request to change layer
+        # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
+        # @param keyboard_writer [IO]
+        # @param source_keyboards [Array<Revdev::Device>]
+        # @param internal_touchpad [Revdev::Device]
+        def initialize(layer_manager:, keyboard_writer:, source_keyboards:, internal_touchpad:)
+          @layer_manager = layer_manager # request to change layer
           @keyboard_writer = keyboard_writer # write event to original keyboard
           @source_keyboards = source_keyboards # original keyboard
           @internal_touchpad = internal_touchpad # internal touchpad
-          @layers = layers # remap configuration from config.yml
         end
 
         def run
@@ -94,6 +99,63 @@ module Fusuma
           rescue => e
             puts e.message
             puts e.backtrace.join "\n\t"
+          end
+        end
+
+        # Find remappable key from mapping and return remapped key code
+        # If not found, return original key code
+        # If the key is found but its value is not valid, return nil
+        # @example
+        #  find_remapped_code({ "A" => "b" }, 30) # => 48
+        #  find_remapped_code({ "A" => "b" }, 100) # => 100
+        #  find_remapped_code({ "A" => {command: 'echo foobar'}  }, 30) # => nil
+        #
+        # @param [Hash] mapping
+        # @param [Integer] code
+        # @return [Integer, nil]
+        def find_remapped_code(mapping, code)
+          key = find_key_from_code(code) # key = "A"
+          remapped_key = mapping.fetch(key.to_sym, nil) # remapped_key = "b"
+          return code unless remapped_key # return original code if key is not found
+
+          find_code_from_key(remapped_key) # remapped_code = 48
+        end
+
+        # Find key name from key code
+        # @example
+        #  find_key_from_code(30) # => "A"
+        #  find_key_from_code(48) # => "B"
+        # @param [Integer] code
+        # @return [String]
+        def find_key_from_code(code)
+          # { 30 => :A, 48 => :B, ... }
+          @keys_per_code ||= Revdev.constants.select { |c| c.start_with? "KEY_" }.map { |c| [Revdev.const_get(c), c.to_s.delete_prefix("KEY_")] }.to_h
+          @keys_per_code[code]
+        end
+
+        # Find key code from key name (e.g. "A", "B", "BTN_LEFT")
+        # If key name is not found, return nil
+        # @example
+        #  find_code_from_key("A") # => 30
+        #  find_code_from_key("B") # => 48
+        #  find_code_from_key("BTN_LEFT") # => 272
+        #  find_code_from_key("NOT_FOUND") # => nil
+        # @param [String] key
+        # @return [Integer] when key is available
+        # @return [nil] when key is not available
+        def find_code_from_key(key)
+          # { KEY_A => 30, KEY_B => 48, ... }
+          @codes_per_key ||= Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }.map { |c| [c, Revdev.const_get(c)] }.to_h
+
+          case key
+          when String
+            if key.start_with?("BTN_")
+              @codes_per_key[key.upcase.to_sym]
+            else
+              @codes_per_key["KEY_#{key}".upcase.to_sym]
+            end
+          when Integer
+            @codes_per_key["KEY_#{key}".upcase.to_sym]
           end
         end
       end
