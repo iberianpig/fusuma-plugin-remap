@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "fusuma/plugin/remap/layer"
+require "fusuma/plugin/remap/layer_manager"
 
 module Fusuma
   module Plugin
@@ -17,9 +17,7 @@ module Fusuma
 
         def initialize
           super
-          # pipe to send layer change events to remapper
-          layer_reader = Remap::Layer.instance.reader
-          layer_writer = Remap::Layer.instance.writer
+          layer_manager = Remap::LayerManager.instance
 
           # physical keyboard input event
           @keyboard_reader, keyboard_writer = IO.pipe
@@ -27,16 +25,16 @@ module Fusuma
           source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
 
           @pid = fork do
-            layer_writer.close
+            layer_manager.writer.close
             @keyboard_reader.close
             remapper = Remap::Remapper.new(
-              layer_reader: layer_reader,
+              layer_manager: layer_manager,
               source_keyboards: source_keyboards,
               keyboard_writer: keyboard_writer
             )
             remapper.run
           end
-          layer_reader.close
+          layer_manager.reader.close
           keyboard_writer.close
         end
 

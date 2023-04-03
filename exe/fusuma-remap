@@ -1,9 +1,12 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative '../lib/fusuma/plugin/remap/version'
-require_relative '../lib/fusuma/plugin/remap/remapper'
-require 'revdev'
+require_relative "../lib/fusuma/plugin/remap/version"
+require_relative "../lib/fusuma/plugin/remap/remapper"
+require_relative "../lib/fusuma/plugin/remap/layer_manager"
+require "fusuma/config"
+require "revdev"
+require "msgpack"
 
 include Revdev
 
@@ -15,20 +18,28 @@ else
   exit false
 end
 
-layers = {
-  default: {
-    KEY_CAPSLOCK => KEY_LEFTCTRL
-  },
-  thumbsense: {
-    KEY_J => nil, KEY_K => nil,
-    KEY_F => nil, KEY_D => nil
-  }
-}
+Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
+
+layer_manager = Fusuma::Plugin::Remap::LayerManager.instance
+
+keyboard_reader, keyboard_writer = IO.pipe
+Thread.new do
+  layer_manager.send_layer(layer: { foo: 'bar' })
+  sleep 3
+  layer_manager.send_layer(layer: { thumbsense: true })
+  sleep 3
+  layer_manager.send_layer(layer: { thumbsense: true }, remove: true)
+
+  # u = MessagePack::Unpacker.new(keyboard_reader)
+  # loop do
+  #   puts "unpack: #{u.unpack}"
+  # end
+end
+
 
 Fusuma::Plugin::Remap::Remapper.new(
-  layer_reader: nil,
-  keyboard_writer: nil,
+  layer_manager: layer_manager,
+  keyboard_writer: keyboard_writer,
   source_keyboards: source_keyboards,
-  internal_touchpad: internal_touchpad,
-  layers: layers
+  internal_touchpad: internal_touchpad
 ).run
