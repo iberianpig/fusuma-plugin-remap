@@ -22,20 +22,19 @@ Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
 
 layer_manager = Fusuma::Plugin::Remap::LayerManager.instance
 
-keyboard_reader, keyboard_writer = IO.pipe
+_keyboard_reader, keyboard_writer = IO.pipe
 Thread.new do
-  layer_manager.send_layer(layer: { foo: 'bar' })
+  layer_manager.send_layer(layer: {foo: "bar"})
   sleep 3
-  layer_manager.send_layer(layer: { thumbsense: true })
+  layer_manager.send_layer(layer: {thumbsense: true})
   sleep 3
-  layer_manager.send_layer(layer: { thumbsense: true }, remove: true)
+  layer_manager.send_layer(layer: {thumbsense: true}, remove: true)
 
   # u = MessagePack::Unpacker.new(keyboard_reader)
   # loop do
   #   puts "unpack: #{u.unpack}"
   # end
 end
-
 
 Fusuma::Plugin::Remap::Remapper.new(
   layer_manager: layer_manager,

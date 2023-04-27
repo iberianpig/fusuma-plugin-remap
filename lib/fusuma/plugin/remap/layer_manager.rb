@@ -19,6 +19,10 @@ module Fusuma
         # @param [Hash] layer
         # @param [Boolean] remove
         def send_layer(layer:, remove: false)
+          return if @last_layer == layer && @last_remove == remove
+
+          @last_layer = layer
+          @last_remove = remove
           @writer.puts({layer: layer, remove: remove}.to_msgpack)
         end
 
