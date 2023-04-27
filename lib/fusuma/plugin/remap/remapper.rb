@@ -1,6 +1,8 @@
 require "revdev"
 require "msgpack"
 require "set"
+require_relative "./layer_manager"
+
 require_relative "./ruinput_device_patched"
 
 module Fusuma
@@ -17,94 +19,124 @@ module Fusuma
           @keyboard_writer = keyboard_writer # write event to original keyboard
           @source_keyboards = source_keyboards # original keyboard
           @internal_touchpad = internal_touchpad # internal touchpad
+          @uinput = RuinputDevicePatched.new "/dev/uinput"
+          @pressed_virtual_keys = Set.new
         end
 
         def run
-          @uinput = RuinputDevicePatched.new "/dev/uinput"
+          create_virtual_keyboard
+          set_trap
+          grab_keyboards
 
-          destroy = lambda do
+          old_ie = nil
+          next_mapping = nil
+          current_mapping = {}
+
+          loop do
+            ios = IO.select([*@source_keyboards.map(&:file), @layer_manager.reader])
+            io = ios.first.first
+
+            if io == @layer_manager.reader
+              begin
+                @layer_manager.receive_layer
+              rescue => e
+                MultiLogger.error "#{e.class}: #{e.message}, #{e.backtrace.first}"
+                raise
+              end
+
+              next_mapping = @layer_manager.find_mapping
+              puts "receive layer: #{next_mapping}"
+              next
+            end
+
+            if next_mapping && virtual_keyboard_all_key_released?
+              puts "change layer: #{current_mapping} -> #{next_mapping}"
+              current_mapping = next_mapping
+              next_mapping = nil
+            end
+
+            input_event = @source_keyboards.find { |kbd| kbd.file == io }.read_input_event
+
+            if input_event.type == EV_KEY
+              # FIXME: exit when RIGHTCTRL-LEFTCTRL is pressed
+              if (old_ie&.code == KEY_RIGHTCTRL && old_ie.value != 0) && (input_event.code == KEY_LEFTCTRL && input_event.value != 0)
+                @destroy.call
+              end
+
+              old_ie = input_event
+              packed = {key: find_key_from_code(input_event.code), status: input_event.value}.to_msgpack
+              @keyboard_writer.puts(packed)
+            end
+
+            remapped_code = find_remapped_code(current_mapping, input_event.code)
+
+            # puts "---------" if ie.type == EV_KEY
+            # puts "#{ie.hr_type}\t#{ie.hr_code}->#{find_key_from_code(remapped_code)}\tvalue:#{ie.value}"
+            next unless remapped_code # drop event if remapped_code is nil
+
+            remapped_event = InputEvent.new(input_event.time, input_event.type, remapped_code, input_event.value)
+
+            if remapped_event.code != input_event.code
+              puts "record: remmaped #{input_event.hr_code} -> #{remapped_event.hr_code}"
+              record_virtual_keyboard_event(remapped_event)
+            end
+
+            @uinput.write_input_event(remapped_event)
+          end
+        end
+
+        def record_virtual_keyboard_event(event)
+          case event.value
+          when 0
+            @pressed_virtual_keys.delete(event.code)
+          else
+            @pressed_virtual_keys.add(event.code)
+          end
+          pp @pressed_virtual_keys
+        end
+
+        def virtual_keyboard_all_key_released?
+          @pressed_virtual_keys.empty?
+        end
+
+        def create_virtual_keyboard
+          @uinput.create "fusuma_virtual_keyboard",
+            Revdev::InputId.new(
+              # recognized as an internal keyboard on libinput,
+              # touchpad is disabled when typing
+              # see: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
+              {
+                bustype: Revdev::BUS_I8042,
+                vendor: @internal_touchpad.device_id.vendor,
+                product: @internal_touchpad.device_id.product,
+                version: @internal_touchpad.device_id.version
+              }
+            )
+        end
+
+        def grab_keyboards
+          @source_keyboards.each do |keyboard|
+            wait_release_all_keys(keyboard) && keyboard.grab
+          end
+        end
+
+        def set_trap
+          @destroy = lambda do
             begin
               @source_keyboards.each { |kbd| kbd.ungrab }
-              puts "ungrab"
             rescue => e
               puts e.message
             end
             begin
               @uinput.destroy
-              puts "destroy"
             rescue => e
               puts e.message
             end
             exit 0
           end
 
-          Signal.trap(:INT) { destroy.call }
-          Signal.trap(:TERM) { destroy.call }
-
-          begin
-            @uinput.create "fusuma_remapper",
-              Revdev::InputId.new(
-                # recognized as an internal keyboard on libinput,
-                # touchpad is disabled when typing
-                # see: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
-                {
-                  bustype: Revdev::BUS_I8042,
-                  vendor: @internal_touchpad.device_id.vendor,
-                  product: @internal_touchpad.device_id.product,
-                  version: @internal_touchpad.device_id.version
-                }
-              )
-
-            @source_keyboards.each do |keyboard|
-              loop do
-                # key status if all bytes are 0, the key is not pressed
-                bytes = keyboard.read_ioctl_with(Revdev::EVIOCGKEY)
-                if bytes.unpack("C*").all? { |byte| byte == 0 }
-                  keyboard.grab
-                  break
-                else
-                  # wait until all keys are released
-                  keyboard.read_input_event
-                end
-              end
-            end
-            old_ie = nil
-
-            loop do
-              # FIXME: hanlde multiple keyboards
-              # ios = IO.select([*@source_keyboards, @layer_reader])
-              # case io = ios.first.first
-              # when @source_keyboards
-              #
-              # else
-              #
-              # end
-              keyboard = @source_keyboards.first
-              ie = keyboard.read_input_event
-
-              # FIXME: exit when RIGHTCTRL-LEFTCTRL is pressed
-              if (old_ie&.code == KEY_RIGHTCTRL && old_ie.value != 0) && (ie.code == KEY_LEFTCTRL && ie.value != 0)
-                destroy.call
-              end
-              old_ie = ie if ie.type == EV_KEY
-
-              # TODO: change layer
-              # layer_name = @layer_reader.gets
-              layer_name = :thumbsense
-              mapping = @layers[layer_name]
-              remapped_key = mapping.fetch(ie.code, ie.code)
-
-              next unless remapped_key
-
-              remapped_event = InputEvent.new(ie.time, ie.type, remapped_key, ie.value)
-
-              len = @uinput.write_input_event(remapped_event)
-              puts "type:#{ie.hr_type}(#{ie.type})\tcode:#{ie.hr_code}(#{ie.code})\tvalue:#{ie.value} (#{len})"
-            end
-          rescue => e
-            puts e.message
-            puts e.backtrace.join "\n\t"
-          end
+          Signal.trap(:INT) { @destroy.call }
+          Signal.trap(:TERM) { @destroy.call }
         end
 
         # Find remappable key from mapping and return remapped key code
@@ -161,6 +193,23 @@ module Fusuma
             end
           when Integer
             @codes_per_key["KEY_#{key}".upcase.to_sym]
+          end
+        end
+
+        def released_all_keys?(device)
+          # key status if all bytes are 0, the key is not pressed
+          bytes = device.read_ioctl_with(Revdev::EVIOCGKEY)
+          bytes.unpack("C*").all? { |byte| byte == 0 }
+        end
+
+        def wait_release_all_keys(device, &block)
+          loop do
+            if released_all_keys?(device)
+              break true
+            else
+              # wait until all keys are released
+              device.read_input_event
+            end
           end
         end
       end
