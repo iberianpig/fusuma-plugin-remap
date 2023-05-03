@@ -1,32 +1,70 @@
-# Fusuma::Plugin::Remap
-
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/fusuma/plugin/remap`. To experiment with that code, run `bin/console` for an interactive prompt.
-
-TODO: Delete this and the text above, and describe your gem
+# Fusuma::Plugin::Remap [![Gem Version](https://badge.fury.io/rb/fusuma-plugin-remap.svg)](https://badge.fury.io/rb/fusuma-plugin-remap) [![Build Status](https://github.com/iberianpig/fusuma-plugin-remap/actions/workflows/ubuntu.yml/badge.svg)](https://github.com/iberianpig/fusuma-plugin-remap/actions/workflows/ubuntu.yml)
 
 ## Installation
 
-Install the gem and add to the application's Gemfile by executing:
+**THIS PLUGIN IS EXPERIMENTAL.**
 
-    $ bundle add fusuma-plugin-remap
+A Fusuma plugin for remapping keyboard events into virtual input devices. Compatible with other Fusuma plugins.
 
-If bundler is not being used to manage dependencies, install the gem by executing:
+This plugin empowers users to manipulate keyboard events and convert them into virtual input devices. It is designed to integrate seamlessly with other Fusuma plugins, thus enabling users to construct sophisticated input configurations and achieve distinctive functionalities. A key feature is the dynamic alteration of remapping layers within the Fusuma process, thereby enabling users to adapt their keyboard inputs to suit specific tasks or applications.
 
-    $ gem install fusuma-plugin-remap
+This plugin requires [fusuma](https://github.com/iberianpig/fusuma#update) 2.0
 
-## Usage
+```sh
+$ sudo gem install fusuma-plugin-remap
+```
 
-TODO: Write usage instructions here
+### Set plugin properties
 
-## Development
+Open `~/.config/fusuma/config.yml` and add the following code at the bottom in primary context(first section separated by `---`).
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+```yaml
+plugin:
+  inputs:
+    remap_keyboard_input:
+      keyboard_name_patterns: xremap # (optional) specifiy other source keyboard name
+  buffers:
+    keypress_buffer:
+      source: remap_keyboard_input # (optional) when you use fusuma-plugin-keypress
+  executors:
+    sendkey_executor:
+      device_name: fusuma_virtual_keyboard # (optional) when you use fusuma-plugin-sendkey
 
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and the created tag, and push the `.gem` file to [rubygems.org](https://rubygems.org).
+---
+
+```
+
+## Properties
+
+### Remap
+
+Currently, remapping is only possible in the thumbsense context.
+Please install [fusuma-plugin-thumbsense](https://github.com/iberianpig/fusuma-plugin-thumbsense)
+
+First, add the 'thumbsense' context to `~/.config/fusuma/config.yml`.
+The context is separated by `---` and specified by `context: { thumbsense: true }`.
+
+## Example
+
+Set the following code in `~/.config/fusuma/config.yml`.
+
+```yaml
+
+---
+context: 
+  thumbsense: true
+
+remap:
+  J: BTN_LEFT
+  K: BTN_RIGHT
+  F: BTN_LEFT
+  D: BTN_RIGHT
+  SPACE: BTN_LEFT
+```
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/iberianpig/fusuma-plugin-remap. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/iberianpig/fusuma-plugin-remap/blob/main/CODE_OF_CONDUCT.md).
+Bug reports and pull requests are welcome on GitHub at https://github.com/iberianpig/fusuma-plugin-remap. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
 
 ## License
 
@@ -34,4 +72,4 @@ The gem is available as open source under the terms of the [MIT License](https:/
 
 ## Code of Conduct
 
-Everyone interacting in the Fusuma::Plugin::Remap project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/iberianpig/fusuma-plugin-remap/blob/main/CODE_OF_CONDUCT.md).
+Everyone interacting in the Fusuma::Plugin::Remap project’s codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/iberianpig/fusuma-plugin-remap/blob/master/CODE_OF_CONDUCT.md).
