@@ -10,10 +10,8 @@ Gem::Specification.new do |spec|
   spec.authors = ["iberianpig"]
   spec.email = ["yhkyky@gmail.com"]
 
-  spec.summary = "A Fusuma plugin that enables grabbing and controlling devices, remapping keyboard, touchpad, and mouse events, and dynamically changing remapping layers. Designed to integrate seamlessly with other Fusuma plugins for enhanced device customization."
-  spec.description = "This plugin offers the capability to grab and control various input devices, including keyboards, touchpads, and mice. By remapping key events, touchpad gestures, and mouse button events, users can create a highly customized and efficient input experience.
-
-The plugin is designed to integrate seamlessly with other Fusuma plugins, allowing users to build complex input configurations and achieve unique functionalities. One of the key features of this plugin is the ability to dynamically change remapping layers within the Fusuma process, enabling users to adapt their input devices according to specific tasks or applications."
+  spec.summary = "A Fusuma plugin for remapping keyboard events into virtual input devices."
+  spec.description = "This plugin empowers users to manipulate keyboard events and convert them into virtual input devices. It is designed to integrate seamlessly with other Fusuma plugins, thus enabling users to construct sophisticated input configurations and achieve distinctive functionalities. A key feature is the dynamic alteration of remapping layers within the Fusuma process, thereby enabling users to adapt their keyboard inputs to suit specific tasks or applications."
   spec.homepage = "https://github.com/iberianpig/fusuma-plugin-remap"
   spec.license = "MIT"
 
