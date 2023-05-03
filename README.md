@@ -10,6 +10,29 @@ This plugin empowers users to manipulate keyboard events and convert them into v
 
 This plugin requires [fusuma](https://github.com/iberianpig/fusuma#update) 2.0
 
+### Install dependencies
+
+**NOTE: If you have installed ruby by apt, you must install ruby-dev.**
+```sh
+$ sudo apt-get install libevdev-dev ruby-dev build-essential
+```
+
+### Set up udev rules
+
+fusuma-plugin-remap create virtual input device(`fusuma_virtual_keyboard`) by uinput. So you need to set up udev rules.
+
+```sh
+$ echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/60-udev-fusuma-remap.rules
+```
+
+Then, reload udev rules.
+
+```sh
+$ sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### Install fusuma-plugin-remap
+
 ```sh
 $ sudo gem install fusuma-plugin-remap
 ```
@@ -44,7 +67,7 @@ Please install [fusuma-plugin-thumbsense](https://github.com/iberianpig/fusuma-p
 First, add the 'thumbsense' context to `~/.config/fusuma/config.yml`.
 The context is separated by `---` and specified by `context: { thumbsense: true }`.
 
-## Example
+### Example
 
 Set the following code in `~/.config/fusuma/config.yml`.
 
