@@ -8,7 +8,7 @@ module Fusuma
       class LayerManager
         require "singleton"
         include Singleton
-        attr_reader :reader, :writer
+        attr_reader :reader, :writer, :current_layer
 
         def initialize
           @layers = {}
@@ -19,6 +19,7 @@ module Fusuma
         # @param [Hash] layer
         # @param [Boolean] remove
         def send_layer(layer:, remove: false)
+          # puts "send_layer: #{layer} remove: #{remove}"
           return if @last_layer == layer && @last_remove == remove
 
           @last_layer = layer

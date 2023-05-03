@@ -44,18 +44,20 @@ module Fusuma
                 raise
               end
 
+              MultiLogger.debug "Remapper#run: layer changed to #{@layer_manager.current_layer}"
               next_mapping = @layer_manager.find_mapping
-              puts "receive layer: #{next_mapping}"
               next
             end
 
             if next_mapping && virtual_keyboard_all_key_released?
-              puts "change layer: #{current_mapping} -> #{next_mapping}"
-              current_mapping = next_mapping
+              if current_mapping != next_mapping
+                current_mapping = next_mapping
+              end
               next_mapping = nil
             end
 
             input_event = @source_keyboards.find { |kbd| kbd.file == io }.read_input_event
+            input_key = find_key_from_code(input_event.code)
 
             if input_event.type == EV_KEY
               # FIXME: exit when RIGHTCTRL-LEFTCTRL is pressed
@@ -64,35 +66,47 @@ module Fusuma
               end
 
               old_ie = input_event
-              packed = {key: find_key_from_code(input_event.code), status: input_event.value}.to_msgpack
-              @keyboard_writer.puts(packed)
+              if input_event.value != 2 # repeat
+                packed = {key: input_key, status: input_event.value}.to_msgpack
+                @keyboard_writer.puts(packed)
+              end
             end
 
-            remapped_code = find_remapped_code(current_mapping, input_event.code)
-
-            # puts "---------" if ie.type == EV_KEY
-            # puts "#{ie.hr_type}\t#{ie.hr_code}->#{find_key_from_code(remapped_code)}\tvalue:#{ie.value}"
-            next unless remapped_code # drop event if remapped_code is nil
-
-            remapped_event = InputEvent.new(input_event.time, input_event.type, remapped_code, input_event.value)
-
-            if remapped_event.code != input_event.code
-              puts "record: remmaped #{input_event.hr_code} -> #{remapped_event.hr_code}"
-              record_virtual_keyboard_event(remapped_event)
+            remapped = current_mapping.fetch(input_key.to_sym, nil)
+            if remapped.nil?
+              @uinput.write_input_event(input_event)
+              next
             end
+
+            remapped_event = InputEvent.new(nil, input_event.type, find_code_from_key(remapped), input_event.value)
+
+            # When Set.delete? fails, it means that the key was pressed before remapping started and was released.
+            unless record_virtual_keyboard_event?(remapped, remapped_event.value)
+              # set original key before remapping
+              remapped_event.code = input_event.code
+            end
+
+            # remap to command will be nil
+            # e.g) remap: { X: { command: echo 'foo' } }
+            # this is because the command will be executed by fusuma process
+            next if remapped_event.code.nil?
 
             @uinput.write_input_event(remapped_event)
           end
         end
 
-        def record_virtual_keyboard_event(event)
-          case event.value
+        # @param [Revdev::InputEvent] event
+        # @return [void]
+        def record_virtual_keyboard_event?(remapped_value, event_value)
+          case event_value
           when 0
-            @pressed_virtual_keys.delete(event.code)
+            @pressed_virtual_keys.delete?(remapped_value)
+          when 1
+            @pressed_virtual_keys.add?(remapped_value)
           else
-            @pressed_virtual_keys.add(event.code)
+            # 2 is repeat
+            true
           end
-          pp @pressed_virtual_keys
         end
 
         def virtual_keyboard_all_key_released?
