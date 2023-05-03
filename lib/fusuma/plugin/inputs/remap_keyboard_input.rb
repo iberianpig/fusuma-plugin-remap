@@ -26,6 +26,7 @@ module Fusuma
 
           source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
           internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
+          MultiLogger.info(source_keyboards: source_keyboards.map(&:device_name), internal_touchpad: internal_touchpad.device_name)
 
           @pid = fork do
             layer_manager.writer.close
@@ -44,6 +45,25 @@ module Fusuma
 
         def io
           @keyboard_reader
+        end
+
+        # @param record [String]
+        # @return [Event]
+        def create_event(record:)
+          data = MessagePack.unpack(record) # => {"key"=>"J", "status"=>1}
+
+          unless data.is_a? Hash
+            MultiLogger.error("Invalid record: #{record}", data: data)
+            return
+          end
+
+          code = data["key"]
+          status = (data["status"] == 1) ? "pressed" : "released"
+          record = Events::Records::KeypressRecord.new(status: status, code: code)
+
+          e = Events::Event.new(tag: tag, record: record)
+          MultiLogger.debug(input_event: e)
+          e
         end
 
         # Devices to detect key presses and releases
