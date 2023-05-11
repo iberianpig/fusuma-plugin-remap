@@ -22,6 +22,7 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = ">= 2.5.1"
   spec.add_dependency "fusuma", "~> 2.0"
+  spec.add_dependency "fusuma-plugin-keypress", "~> 0.5"
   spec.add_dependency "msgpack"
   spec.add_dependency "revdev"
   spec.add_dependency "ruinput"

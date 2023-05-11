@@ -48,7 +48,7 @@ plugin:
       keyboard_name_patterns: xremap # (optional) specifiy other source keyboard name
   buffers:
     keypress_buffer:
-      source: remap_keyboard_input # (optional) when you use fusuma-plugin-keypress
+      source: remap_keyboard_input # (required) use buffer of fusuma-plugin-keypress
   executors:
     sendkey_executor:
       device_name: fusuma_virtual_keyboard # (optional) when you use fusuma-plugin-sendkey

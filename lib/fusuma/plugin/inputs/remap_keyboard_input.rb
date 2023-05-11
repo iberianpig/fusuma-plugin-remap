@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "fusuma/device"
 require "fusuma/plugin/remap/remapper"
 require "fusuma/plugin/remap/layer_manager"
 
@@ -19,28 +20,7 @@ module Fusuma
 
         def initialize
           super
-          layer_manager = Remap::LayerManager.instance
-
-          # physical keyboard input event
-          @keyboard_reader, keyboard_writer = IO.pipe
-
-          source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
-          internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
-          MultiLogger.info(source_keyboards: source_keyboards.map(&:device_name), internal_touchpad: internal_touchpad.device_name)
-
-          @pid = fork do
-            layer_manager.writer.close
-            @keyboard_reader.close
-            remapper = Remap::Remapper.new(
-              layer_manager: layer_manager,
-              source_keyboards: source_keyboards,
-              keyboard_writer: keyboard_writer,
-              internal_touchpad: internal_touchpad
-            )
-            remapper.run
-          end
-          layer_manager.reader.close
-          keyboard_writer.close
+          setup_remapper
         end
 
         def io
@@ -66,6 +46,33 @@ module Fusuma
           e
         end
 
+        private
+
+        def setup_remapper
+          layer_manager = Remap::LayerManager.instance
+
+          # physical keyboard input event
+          @keyboard_reader, keyboard_writer = IO.pipe
+
+          source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
+          internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
+          MultiLogger.info(source_keyboards: source_keyboards.map(&:device_name), internal_touchpad: internal_touchpad.device_name)
+
+          @pid = fork do
+            layer_manager.writer.close
+            @keyboard_reader.close
+            remapper = Remap::Remapper.new(
+              layer_manager: layer_manager,
+              source_keyboards: source_keyboards,
+              keyboard_writer: keyboard_writer,
+              internal_touchpad: internal_touchpad
+            )
+            remapper.run
+          end
+          layer_manager.reader.close
+          keyboard_writer.close
+        end
+
         # Devices to detect key presses and releases
         class KeyboardSelector
           def initialize(names = ["keyboard", "Keyboard", "KEYBOARD"])
@@ -74,15 +81,8 @@ module Fusuma
 
           # @return [Array<Revdev::EventDevice>]
           def select
-            Fusuma::Device.all.select do |d|
-              Array(@names).any? do |name|
-                d.name =~ /#{name}/
-              end
-            end.map do |d|
-              device_path = "/dev/input/#{d.id}"
-              ev = Revdev::EventDevice.new(device_path)
-              ev
-            end
+            devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
+            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
           end
         end
 
@@ -100,15 +100,11 @@ module Fusuma
                 end
               end
             else
-              # touchpads
+              # available returns only touchpad devices
               Fusuma::Device.available
             end
 
-            devices.map do |d|
-              device_path = "/dev/input/#{d.id}"
-              ev = Revdev::EventDevice.new(device_path)
-              ev
-            end
+            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
           end
         end
       end
