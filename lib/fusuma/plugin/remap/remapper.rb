@@ -39,9 +39,8 @@ module Fusuma
             if io == @layer_manager.reader
               begin
                 @layer_manager.receive_layer
-              rescue => e
-                MultiLogger.error "#{e.class}: #{e.message}, #{e.backtrace.first}"
-                raise
+              rescue EOFError
+                @destroy.call
               end
 
               MultiLogger.debug "Remapper#run: layer changed to #{@layer_manager.current_layer}"
