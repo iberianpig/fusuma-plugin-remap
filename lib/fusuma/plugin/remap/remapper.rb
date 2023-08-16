@@ -135,16 +135,18 @@ module Fusuma
 
         def set_trap
           @destroy = lambda do
-            begin
-              @source_keyboards.each { |kbd| kbd.ungrab }
-            rescue => e
-              puts e.message
+            @source_keyboards.each do |kbd|
+              kbd.ungrab
+            rescue Errno::EINVAL
+              # already ungrabbed
             end
+
             begin
               @uinput.destroy
-            rescue => e
-              puts e.message
+            rescue IOError
+              # already destroyed
             end
+
             exit 0
           end
 
