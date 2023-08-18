@@ -9,6 +9,8 @@ module Fusuma
     module Inputs
       # Get keyboard events from remapper
       class RemapKeyboardInput < Input
+        include CustomProcess
+
         def config_param_types
           {
             keyboard_name_patterns: [Array, String],
