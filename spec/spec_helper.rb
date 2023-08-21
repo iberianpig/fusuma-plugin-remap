@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "rspec/debug"
 require "fusuma/plugin/remap"
 
 RSpec.configure do |config|
