@@ -94,6 +94,8 @@ module Fusuma
           end
         end
 
+        private
+
         # @param [Revdev::InputEvent] event
         # @return [void]
         def record_virtual_keyboard_event?(remapped_value, event_value)
