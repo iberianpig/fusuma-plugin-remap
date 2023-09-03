@@ -96,11 +96,7 @@ module Fusuma
           # @return [Array<Revdev::EventDevice>]
           def select
             devices = if @names
-              Fusuma::Device.all.select do |d|
-                Array(@names).any? do |name|
-                  d.name =~ /#{name}/
-                end
-              end
+              Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
             else
               # available returns only touchpad devices
               Fusuma::Device.available
