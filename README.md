@@ -37,26 +37,6 @@ $ sudo udevadm control --reload-rules && sudo udevadm trigger
 $ sudo gem install fusuma-plugin-remap
 ```
 
-### Set plugin properties
-
-Open `~/.config/fusuma/config.yml` and add the following code at the bottom in primary context(first section separated by `---`).
-
-```yaml
-plugin:
-  inputs:
-    remap_keyboard_input:
-      keyboard_name_patterns: xremap # (optional) specifiy other source keyboard name
-  buffers:
-    keypress_buffer:
-      source: remap_keyboard_input # (required) use buffer of fusuma-plugin-keypress
-  executors:
-    sendkey_executor:
-      device_name: fusuma_virtual_keyboard # (optional) when you use fusuma-plugin-sendkey
-
----
-
-```
-
 ## Properties
 
 ### Remap

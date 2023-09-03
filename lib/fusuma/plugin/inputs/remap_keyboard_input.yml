@@ -1,0 +1,10 @@
+plugin:
+  inputs:
+    remap_keyboard_input:
+      keyboard_name_patterns: ["keyboard", "Keyboard", "KEYBOARD"]
+  buffers:
+    keypress_buffer:
+      source: remap_keyboard_input
+  executors:
+    sendkey_executor:
+      device_name: fusuma_virtual_keyboard
