@@ -79,7 +79,8 @@ module Fusuma
 
             remapped_event = InputEvent.new(nil, input_event.type, find_code_from_key(remapped), input_event.value)
 
-            # When Set.delete? fails, it means that the key was pressed before remapping started and was released.
+            # Workaround to solve the problem that the remapped key remains pressed
+            # when the key pressed before remapping is released after remapping
             unless record_virtual_keyboard_event?(remapped, remapped_event.value)
               # set original key before remapping
               remapped_event.code = input_event.code
@@ -96,14 +97,18 @@ module Fusuma
 
         private
 
-        # @param [Revdev::InputEvent] event
-        # @return [void]
+        # record virtual keyboard event
+        # @param [String] remapped_value remapped key name
+        # @param [Integer] event_value event value
+        # @return [Boolean] false if the key was pressed before remapping started and was released
+        # @return [Boolean] true if the key was not pressed before remapping started
         def record_virtual_keyboard_event?(remapped_value, event_value)
           case event_value
           when 0
             @pressed_virtual_keys.delete?(remapped_value)
           when 1
             @pressed_virtual_keys.add?(remapped_value)
+            true # Always return true because the remapped key may be the same
           else
             # 2 is repeat
             true
@@ -131,7 +136,13 @@ module Fusuma
 
         def grab_keyboards
           @source_keyboards.each do |keyboard|
-            wait_release_all_keys(keyboard) && keyboard.grab
+            wait_release_all_keys(keyboard)
+            begin
+              keyboard.grab
+              MultiLogger.info "Grabbed #{keyboard.device_name}"
+            rescue Errno::EBUSY
+              MultiLogger.error "Failed to grab #{keyboard.device_name}"
+            end
           end
         end
 
