@@ -89,7 +89,7 @@ module Fusuma
         end
 
         class TouchpadSelector
-          def initialize(names)
+          def initialize(names = nil)
             @names = names
           end
 
