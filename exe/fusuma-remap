@@ -1,43 +1,94 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "fusuma/plugin/inputs/input"
+require_relative "../lib/fusuma/plugin/inputs/remap_keyboard_input"
 require_relative "../lib/fusuma/plugin/remap/version"
 require_relative "../lib/fusuma/plugin/remap/remapper"
 require_relative "../lib/fusuma/plugin/remap/layer_manager"
 require "fusuma/config"
+require "fusuma/multi_logger"
 require "revdev"
 require "msgpack"
+require "irb"
+
+Fusuma::MultiLogger.instance.debug_mode = true
+Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
 
 include Revdev
 
-if ARGV.length > 1
-  source_keyboards = [Revdev::EventDevice.new(ARGV.shift)]
-  internal_touchpad = Revdev::EventDevice.new(ARGV.shift)
-else
-  warn "Usage: #{$PROGRAM_NAME} /dev/input/KEYBOARD /dev/input/TOUCHPAD"
-  exit false
+if ARGV.length < 1
+  puts "you can specify keyboard name pattern and touchpad name pattern"
+  puts "$ #{$PROGRAM_NAME} 'AT Translated Set 2 keyboard' 'SynPS/2 Synaptics TouchPad'"
 end
 
-Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
+keyboard_name_pattern ||= ARGV.shift || ["keyboard", "Keyboard", "KEYBOARD"]
+touchpad_name_pattern ||= ARGV.shift || ["touchpad", "Touchpad", "TOUCHPAD"]
 
-layer_manager = Fusuma::Plugin::Remap::LayerManager.instance
+source_keyboards = Fusuma::Plugin::Inputs::RemapKeyboardInput::KeyboardSelector.new(keyboard_name_pattern).select
+internal_touchpad = Fusuma::Plugin::Inputs::RemapKeyboardInput::TouchpadSelector.new(touchpad_name_pattern).select.first
 
-_keyboard_reader, keyboard_writer = IO.pipe
+if source_keyboards.empty?
+  warn "no keyboard found"
+  exit 1
+end
+
+if internal_touchpad.nil?
+  warn "no touchpad found"
+  exit 1
+end
+
+@layer_manager = Fusuma::Plugin::Remap::LayerManager.instance
+
+keyboard_reader, keyboard_writer = IO.pipe
+
+layers = Fusuma::Config.instance.keymap.select { |m| m[:context] && m[:remap] }.map { |m| m[:context] }.uniq
 Thread.new do
-  layer_manager.send_layer(layer: {foo: "bar"})
-  sleep 3
-  layer_manager.send_layer(layer: {thumbsense: true})
-  sleep 3
-  layer_manager.send_layer(layer: {thumbsense: true}, remove: true)
+  layers.each do |layer|
+    @layer_manager.send_layer(layer: layer)
+    @layer_manager.send_layer(layer: layer, remove: true)
+    sleep 1
+  end
 
-  # u = MessagePack::Unpacker.new(keyboard_reader)
-  # loop do
-  #   puts "unpack: #{u.unpack}"
-  # end
+  puts "=================================================="
+  puts "press key UP or DOWN to change layer"
+  puts "=================================================="
+
+  layer_selector = Fiber.new do
+    layers = ([{}] | layers)
+    @reverse = false
+    pos = 0
+    loop do
+      pos = if @reverse
+        (pos - 1) % layers.size
+      else
+        (pos + 1) % layers.size
+      end
+      @layer_manager.send_layer(layer: @layer_manager.current_layer, remove: true)
+      @layer_manager.send_layer(layer: layers[pos])
+      Fiber.yield
+    end
+  end
+
+  unpacker = MessagePack::Unpacker.new(keyboard_reader)
+  loop do
+    data = unpacker.unpack
+    next unless data.is_a? Hash
+    next unless data["status"] == 1
+
+    case data["key"]
+    when "UP"
+      @reverse = false
+      layer_selector.resume
+    when "DOWN"
+      @reverse = true
+      layer_selector.resume
+    end
+  end
 end
 
 Fusuma::Plugin::Remap::Remapper.new(
-  layer_manager: layer_manager,
+  layer_manager: @layer_manager,
   keyboard_writer: keyboard_writer,
   source_keyboards: source_keyboards,
   internal_touchpad: internal_touchpad

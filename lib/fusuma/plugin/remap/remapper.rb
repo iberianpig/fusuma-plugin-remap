@@ -44,6 +44,7 @@ module Fusuma
 
               MultiLogger.debug "Remapper#run: layer changed to #{@layer_manager.current_layer}"
               next_mapping = @layer_manager.find_mapping
+              MultiLogger.debug "Remapper#run: next_mapping: #{next_mapping}"
               next
             end
 
