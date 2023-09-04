@@ -19,13 +19,12 @@ module Fusuma
           @keyboard_writer = keyboard_writer # write event to original keyboard
           @source_keyboards = source_keyboards # original keyboard
           @internal_touchpad = internal_touchpad # internal touchpad
-          @uinput = RuinputDevicePatched.new "/dev/uinput"
-          @pressed_virtual_keys = Set.new
         end
 
         def run
           create_virtual_keyboard
           set_trap
+          set_emergency_ungrab_keybinds("RIGHTCTRL", "LEFTCTRL")
           grab_keyboards
 
           old_ie = nil
@@ -59,10 +58,7 @@ module Fusuma
             input_key = find_key_from_code(input_event.code)
 
             if input_event.type == EV_KEY
-              # FIXME: exit when RIGHTCTRL-LEFTCTRL is pressed
-              if (old_ie&.code == KEY_RIGHTCTRL && old_ie.value != 0) && (input_event.code == KEY_LEFTCTRL && input_event.value != 0)
-                @destroy.call
-              end
+              @emergency_stop.call(old_ie, input_event)
 
               old_ie = input_event
               if input_event.value != 2 # repeat
@@ -73,7 +69,7 @@ module Fusuma
 
             remapped = current_mapping.fetch(input_key.to_sym, nil)
             if remapped.nil?
-              @uinput.write_input_event(input_event)
+              uinput.write_input_event(input_event)
               next
             end
 
@@ -91,11 +87,19 @@ module Fusuma
             # this is because the command will be executed by fusuma process
             next if remapped_event.code.nil?
 
-            @uinput.write_input_event(remapped_event)
+            uinput.write_input_event(remapped_event)
           end
         end
 
         private
+
+        def uinput
+          @uinput ||= RuinputDevicePatched.new "/dev/uinput"
+        end
+
+        def pressed_virtual_keys
+          @pressed_virtual_keys ||= Set.new
+        end
 
         # record virtual keyboard event
         # @param [String] remapped_value remapped key name
@@ -105,9 +109,9 @@ module Fusuma
         def record_virtual_keyboard_event?(remapped_value, event_value)
           case event_value
           when 0
-            @pressed_virtual_keys.delete?(remapped_value)
+            pressed_virtual_keys.delete?(remapped_value)
           when 1
-            @pressed_virtual_keys.add?(remapped_value)
+            pressed_virtual_keys.add?(remapped_value)
             true # Always return true because the remapped key may be the same
           else
             # 2 is repeat
@@ -116,11 +120,11 @@ module Fusuma
         end
 
         def virtual_keyboard_all_key_released?
-          @pressed_virtual_keys.empty?
+          pressed_virtual_keys.empty?
         end
 
         def create_virtual_keyboard
-          @uinput.create "fusuma_virtual_keyboard",
+          uinput.create "fusuma_virtual_keyboard",
             Revdev::InputId.new(
               # recognized as an internal keyboard on libinput,
               # touchpad is disabled when typing
@@ -150,12 +154,13 @@ module Fusuma
           @destroy = lambda do
             @source_keyboards.each do |kbd|
               kbd.ungrab
+              MultiLogger.info "Ungrabbed #{kbd.device_name}"
             rescue Errno::EINVAL
               # already ungrabbed
             end
 
             begin
-              @uinput.destroy
+              uinput.destroy
             rescue IOError
               # already destroyed
             end
@@ -165,6 +170,20 @@ module Fusuma
 
           Signal.trap(:INT) { @destroy.call }
           Signal.trap(:TERM) { @destroy.call }
+        end
+
+        # Emergency stop keybind for virtual keyboard
+        def set_emergency_ungrab_keybinds(first_key, second_key)
+          first_keycode = find_code_from_key(first_key)
+          second_keycode = find_code_from_key(second_key)
+          MultiLogger.info "Emergency ungrab keybind: #{first_key} + #{second_key}"
+
+          @emergency_stop = lambda do |prev, current|
+            if (prev&.code == first_keycode && prev.value != 0) && (current.code == second_keycode && current.value != 0)
+              MultiLogger.info "Emergency ungrab keybind: #{first_key} + #{second_key}"
+              @destroy.call
+            end
+          end
         end
 
         # Find remappable key from mapping and return remapped key code
