@@ -53,7 +53,9 @@ module Fusuma
         def setup_remapper
           source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
           internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
-          MultiLogger.info(source_keyboards: source_keyboards.map(&:device_name), internal_touchpad: internal_touchpad.device_name)
+          MultiLogger.info("set up remapper")
+          MultiLogger.info("source_keyboards: #{source_keyboards.map(&:device_name)}")
+          MultiLogger.info("internal_touchpad: #{internal_touchpad.device_name}")
 
           layer_manager = Remap::LayerManager.instance
 

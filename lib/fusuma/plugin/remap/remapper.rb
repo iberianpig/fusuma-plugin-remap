@@ -10,6 +10,9 @@ module Fusuma
     module Remap
       class Remapper
         include Revdev
+
+        VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
+
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
         # @param keyboard_writer [IO]
         # @param source_keyboards [Array<Revdev::Device>]
@@ -125,7 +128,9 @@ module Fusuma
         end
 
         def create_virtual_keyboard
-          uinput.create "fusuma_virtual_keyboard",
+          MultiLogger.info "Create virtual keyboard: #{VIRTUAL_KEYBOARD_NAME}"
+
+          uinput.create VIRTUAL_KEYBOARD_NAME,
             Revdev::InputId.new(
               # recognized as an internal keyboard on libinput,
               # touchpad is disabled when typing
