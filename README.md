@@ -65,6 +65,13 @@ remap:
   SPACE: BTN_LEFT
 ```
 
+## Emergency stop keybind for virtual keyboard
+
+This is a special keybind for emergency stop. 
+If you press following keybind, physical keyboard will be ungrabbed and Fusuma process will be terminated.
+
+<kbd>RIGHTCTRL</kbd> → <kbd>LEFTCTRL</kbd>
+
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at https://github.com/iberianpig/fusuma-plugin-remap. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
