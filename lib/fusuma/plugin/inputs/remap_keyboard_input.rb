@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "fusuma/device"
-require "fusuma/plugin/remap/remapper"
+require "fusuma/plugin/remap/keyboard_remapper"
 require "fusuma/plugin/remap/layer_manager"
 
 module Fusuma
@@ -75,7 +75,7 @@ module Fusuma
           @pid = fork do
             layer_manager.writer.close
             @keyboard_reader.close
-            remapper = Remap::Remapper.new(
+            remapper = Remap::KeyboardRemapper.new(
               layer_manager: layer_manager,
               source_keyboards: source_keyboards,
               keyboard_writer: keyboard_writer,

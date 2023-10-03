@@ -4,18 +4,15 @@
 require "fusuma/plugin/inputs/input"
 require_relative "../lib/fusuma/plugin/inputs/remap_keyboard_input"
 require_relative "../lib/fusuma/plugin/remap/version"
-require_relative "../lib/fusuma/plugin/remap/remapper"
+require_relative "../lib/fusuma/plugin/remap/keyboard_remapper"
 require_relative "../lib/fusuma/plugin/remap/layer_manager"
 require "fusuma/config"
 require "fusuma/multi_logger"
-require "revdev"
 require "msgpack"
 require "irb"
 
 Fusuma::MultiLogger.instance.debug_mode = true
 Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
-
-include Revdev
 
 if ARGV.length < 1
   puts "you can specify keyboard name pattern and touchpad name pattern"
@@ -87,7 +84,7 @@ Thread.new do
   end
 end
 
-Fusuma::Plugin::Remap::Remapper.new(
+Fusuma::Plugin::Remap::KeyboardRemapper.new(
   layer_manager: @layer_manager,
   keyboard_writer: keyboard_writer,
   source_keyboards: source_keyboards,

@@ -3,12 +3,12 @@ require "msgpack"
 require "set"
 require_relative "layer_manager"
 
-require_relative "ruinput_device_patched"
+require_relative "uinput_keyboard"
 
 module Fusuma
   module Plugin
     module Remap
-      class Remapper
+      class KeyboardRemapper
         include Revdev
 
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
@@ -69,7 +69,7 @@ module Fusuma
 
             remapped = current_mapping.fetch(input_key.to_sym, nil)
             if remapped.nil?
-              uinput.write_input_event(input_event)
+              uinput_keyboard.write_input_event(input_event)
               next
             end
 
@@ -87,7 +87,7 @@ module Fusuma
             # this is because the command will be executed by fusuma process
             next if remapped_event.code.nil?
 
-            uinput.write_input_event(remapped_event)
+            uinput_keyboard.write_input_event(remapped_event)
           end
         rescue Errno::ENODEV => e # device is removed
           MultiLogger.error e.message
@@ -99,8 +99,8 @@ module Fusuma
 
         private
 
-        def uinput
-          @uinput ||= RuinputDevicePatched.new "/dev/uinput"
+        def uinput_keyboard
+          @uinput_keyboard ||= UinputKeyboard.new("/dev/uinput")
         end
 
         def pressed_virtual_keys
@@ -132,11 +132,13 @@ module Fusuma
         def create_virtual_keyboard
           MultiLogger.info "Create virtual keyboard: #{VIRTUAL_KEYBOARD_NAME}"
 
-          uinput.create VIRTUAL_KEYBOARD_NAME,
+          uinput_keyboard.create VIRTUAL_KEYBOARD_NAME,
             Revdev::InputId.new(
-              # recognized as an internal keyboard on libinput,
-              # touchpad is disabled when typing
-              # see: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
+              # disable while typing is enabled when
+              # - Both the keyboard and touchpad are BUS_I8042
+              # - The touchpad and keyboard have the same vendor/product
+              # ref: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
+              #
               {
                 bustype: Revdev::BUS_I8042,
                 vendor: @internal_touchpad.device_id.vendor,
@@ -162,14 +164,13 @@ module Fusuma
           @destroy = lambda do
             @source_keyboards.each do |kbd|
               kbd.ungrab
-              MultiLogger.info "Ungrabbed #{kbd.device_name}"
             rescue Errno::EINVAL
             rescue Errno::ENODEV
               # already ungrabbed
             end
 
             begin
-              uinput.destroy
+              uinput_keyboard.destroy
             rescue IOError
               # already destroyed
             end
