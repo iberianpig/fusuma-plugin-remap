@@ -39,11 +39,7 @@ module Fusuma
             io = ios.first.first
 
             if io == @layer_manager.reader
-              begin
-                @layer_manager.receive_layer
-              rescue EOFError
-                @destroy.call
-              end
+              @layer_manager.receive_layer
 
               MultiLogger.debug "Remapper#run: layer changed to #{@layer_manager.current_layer}"
               next_mapping = @layer_manager.find_mapping
@@ -93,6 +89,12 @@ module Fusuma
 
             uinput.write_input_event(remapped_event)
           end
+        rescue Errno::ENODEV => e # device is removed
+          MultiLogger.error e.message
+        rescue EOFError => e # device is closed
+          MultiLogger.error e.message
+        ensure
+          @destroy.call
         end
 
         private
@@ -162,6 +164,7 @@ module Fusuma
               kbd.ungrab
               MultiLogger.info "Ungrabbed #{kbd.device_name}"
             rescue Errno::EINVAL
+            rescue Errno::ENODEV
               # already ungrabbed
             end
 
