@@ -53,6 +53,17 @@ module Fusuma
         def setup_remapper
           source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
           internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
+
+          if source_keyboards.empty?
+            MultiLogger.error("No keyboard found: #{config_params(:keyboard_name_patterns)}")
+            exit
+          end
+
+          if internal_touchpad.nil?
+            MultiLogger.error("No touchpad found: #{config_params(:touchpad_name_patterns)}")
+            exit
+          end
+
           MultiLogger.info("set up remapper")
           MultiLogger.info("source_keyboards: #{source_keyboards.map(&:device_name)}")
           MultiLogger.info("internal_touchpad: #{internal_touchpad.device_name}")
