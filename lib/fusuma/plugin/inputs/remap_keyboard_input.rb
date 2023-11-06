@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 require "fusuma/device"
-require "fusuma/plugin/remap/keyboard_remapper"
-require "fusuma/plugin/remap/layer_manager"
+require_relative "../remap/keyboard_remapper"
+require_relative "../remap/layer_manager"
 
 module Fusuma
   module Plugin

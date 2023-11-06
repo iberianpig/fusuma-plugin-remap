@@ -2,7 +2,6 @@ require "revdev"
 require "msgpack"
 require "set"
 require_relative "layer_manager"
-
 require_relative "uinput_keyboard"
 
 module Fusuma

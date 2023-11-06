@@ -1,0 +1,7 @@
+plugin:
+  inputs:
+    remap_touchpad_input:
+      touchpad_name_patterns: ["touchpad", "Touchpad", "TOUCHPAD"]
+  buffers:
+    thumbsense_buffer:
+      source: remap_touchpad_input
