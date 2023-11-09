@@ -61,7 +61,8 @@ module Fusuma
 
               old_ie = input_event
               if input_event.value != 2 # repeat
-                packed = {key: input_key, status: input_event.value}.to_msgpack
+                data = {key: input_key, status: input_event.value, layer: @layer_manager.current_layer}
+                packed = data.to_msgpack
                 @keyboard_writer.puts(packed)
               end
             end

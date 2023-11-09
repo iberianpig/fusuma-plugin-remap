@@ -41,7 +41,8 @@ module Fusuma
 
           code = data["key"]
           status = (data["status"] == 1) ? "pressed" : "released"
-          record = Events::Records::KeypressRecord.new(status: status, code: code)
+          layer = data["layer"]
+          record = Events::Records::KeypressRecord.new(status: status, code: code, layer: layer)
 
           e = Events::Event.new(tag: tag, record: record)
           MultiLogger.debug(input_event: e)
