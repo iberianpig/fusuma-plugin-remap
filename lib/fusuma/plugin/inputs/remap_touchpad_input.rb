@@ -28,15 +28,12 @@ module Fusuma
           @touchpad_reader
         end
 
-        # @param record [String]
-        # @return [Event]
-        def create_event(record:)
-          data = MessagePack.unpack(record) # => { "gesture" => "touch", "finger" => 3, "status" => 1 }
+        # @return [Record]
+        def read_from_io
+          @unpacker ||= MessagePack::Unpacker.new(io)
+          data = @unpacker.unpack
 
-          unless data.is_a? Hash
-            MultiLogger.error("Invalid record: #{record}", data: data)
-            return
-          end
+          raise "data is not Hash : #{data}" unless data.is_a? Hash
 
           gesture = "touch"
           finger = data["finger"]
@@ -45,13 +42,11 @@ module Fusuma
             "end"
           when 1
             "begin"
+            # when 2 # TODO: support update
+            #   "update"
           end
 
-          record = Events::Records::GestureRecord.new(status: status, gesture: gesture, finger: finger, delta: nil)
-
-          e = Events::Event.new(tag: tag, record: record)
-          MultiLogger.debug(input_event: e)
-          e
+          Events::Records::GestureRecord.new(status: status, gesture: gesture, finger: finger, delta: nil)
         end
 
         private

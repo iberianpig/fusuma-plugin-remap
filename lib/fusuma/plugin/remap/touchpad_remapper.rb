@@ -142,8 +142,8 @@ module Fusuma
               # Send events only when status changes from 0 to 1 or from 1 to 0
               if @status != @prev_status
                 @prev_status = @status
-                # input plugin needs to write a line (including newline) to the pipe, so use puts
-                @touchpad.puts({status: @status, finger: @finger_state, touch_state: @touch_state}.to_msgpack)
+                data = {status: @status, finger: @finger_state, touch_state: @touch_state}
+                @touchpad.write(data.to_msgpack)
               end
             end
           end
