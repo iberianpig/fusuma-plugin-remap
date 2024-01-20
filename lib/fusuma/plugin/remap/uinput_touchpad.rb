@@ -85,10 +85,10 @@ class UinputTouchpad < Ruinput::UinputDevice
     Revdev::KEY_CNT.times do |i|
       # https://github.com/mooz/xkeysnail/pull/101/files
       if mouse_btns.include?(i) || touchpad_btns.include?(i)
-        puts "setting #{i} (#{Revdev::REVERSE_MAPS[:KEY][i]})"
+        # puts "setting #{i} (#{Revdev::REVERSE_MAPS[:KEY][i]})"
         @file.ioctl UI_SET_KEYBIT, i
       else
-        puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:KEY][i]})"
+        # puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:KEY][i]})"
       end
     end
 
