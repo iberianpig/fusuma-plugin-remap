@@ -115,7 +115,7 @@ module Fusuma
             end
 
             # TODO: This is Thumbsense specific logic, so it should be moved to Thumbsense plugin
-            # Disable 20% of the touch area on the left and right edges of the touchpad.
+            # Disable 20% of the touch area on the left, right, and top edges of the touchpad.
             # Prevents the cursor from moving left and right when the left and right edges of the touchpad are touched.
             if @touch_state[@mt_slot][:valid_touch_point] != true && (@touch_state[@mt_slot][:X] && @touch_state[@mt_slot][:Y])
               @touch_state[@mt_slot][:valid_touch_point] =
