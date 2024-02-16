@@ -114,18 +114,11 @@ module Fusuma
               raise "unhandled event"
             end
 
-            # TODO: This is Thumbsense specific logic, so it should be moved to Thumbsense plugin
-            # Disable 20% of the touch area on the left, right, and top edges of the touchpad.
-            # Prevents the cursor from moving left and right when the left and right edges of the touchpad are touched.
-            if @touch_state[@mt_slot][:valid_touch_point] != true && (@touch_state[@mt_slot][:X] && @touch_state[@mt_slot][:Y])
-              @touch_state[@mt_slot][:valid_touch_point] =
-                if @touch_state[@mt_slot][:Y] > 0.8 * @source_touchpad.absinfo_for_axis(Revdev::ABS_MT_POSITION_Y)[:absmax]
-                  true
-                else
-                  !(@touch_state[@mt_slot][:X] < 0.2 * @source_touchpad.absinfo_for_axis(Revdev::ABS_MT_POSITION_X)[:absmax] \
-                  || @touch_state[@mt_slot][:X] > 0.8 * @source_touchpad.absinfo_for_axis(Revdev::ABS_MT_POSITION_X)[:absmax] \
-                  || @touch_state[@mt_slot][:Y] < 0.2 * @source_touchpad.absinfo_for_axis(Revdev::ABS_MT_POSITION_Y)[:absmax])
-                end
+            # TODO:
+            # Remember the most recent valid touch position and exclude it if it is close to that position
+            # For example, when dragging, it is possible to touch around the edge of the touchpad again after reaching the edge of the touchpad, so in that case, you do not want to execute palm detection
+            if @touch_state[@mt_slot][:valid_touch_point] != true
+              @touch_state[@mt_slot][:valid_touch_point] = @palm_detector.palm?(@touch_state[@mt_slot])
             end
 
             if @syn_report
@@ -159,6 +152,30 @@ module Fusuma
           MultiLogger.info "Create virtual keyboard: #{VIRTUAL_TOUCHPAD_NAME}"
 
           uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpad)
+        end
+
+        # Detect palm touch
+        class PalmDetection
+          def initialize(touchpad)
+            @max_x = touchpad.absinfo_for_axis(Revdev::ABS_MT_POSITION_X)[:absmax]
+            @max_y = touchpad.absinfo_for_axis(Revdev::ABS_MT_POSITION_Y)[:absmax]
+          end
+
+          def palm?(touch_state)
+            return false unless touch_state[:X] && touch_state[:Y]
+
+            if 0.8 * @max_y < touch_state[:Y]
+              true
+            else
+              !(
+                # Disable 20% of the touch area on the left, right
+                (touch_state[:X] < 0.2 * @max_x || touch_state[:X] > 0.8 * @max_x) ||
+                # Disable 10% of the touch area on the top edge
+                (touch_state[:Y] < 0.1 * @max_y && (touch_state[:X] < 0.2 * @max_x || touch_state[:X] > 0.8 * @max_x)
+                )
+              )
+            end
+          end
         end
       end
     end
