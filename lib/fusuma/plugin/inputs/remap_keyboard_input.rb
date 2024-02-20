@@ -26,7 +26,7 @@ module Fusuma
         end
 
         def io
-          @keyboard_reader
+          @fusuma_reader
         end
 
         # @param record [String]
@@ -71,21 +71,21 @@ module Fusuma
           layer_manager = Remap::LayerManager.instance
 
           # physical keyboard input event
-          @keyboard_reader, keyboard_writer = IO.pipe
+          @fusuma_reader, fusuma_writer = IO.pipe
 
           @pid = fork do
             layer_manager.writer.close
-            @keyboard_reader.close
+            @fusuma_reader.close
             remapper = Remap::KeyboardRemapper.new(
               layer_manager: layer_manager,
               source_keyboards: source_keyboards,
-              keyboard_writer: keyboard_writer,
+              fusuma_writer: fusuma_writer,
               internal_touchpad: internal_touchpad
             )
             remapper.run
           end
           layer_manager.reader.close
-          keyboard_writer.close
+          fusuma_writer.close
         end
 
         # Devices to detect key presses and releases

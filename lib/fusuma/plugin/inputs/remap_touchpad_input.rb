@@ -25,7 +25,7 @@ module Fusuma
         end
 
         def io
-          @touchpad_reader
+          @fusuma_reader
         end
 
         # @return [Record]
@@ -64,20 +64,20 @@ module Fusuma
           # layer_manager = Remap::LayerManager.instance
 
           # physical touchpad input event
-          @touchpad_reader, touchpad_writer = IO.pipe
+          @fusuma_reader, fusuma_writer = IO.pipe
 
           @pid = fork do
             # layer_manager.writer.close
-            @touchpad_reader.close
+            @fusuma_reader.close
             remapper = Remap::TouchpadRemapper.new(
               # layer_manager: layer_manager,
-              touchpad_writer: touchpad_writer,
+              fusuma_writer: fusuma_writer,
               source_touchpad: internal_touchpad
             )
             remapper.run
           end
           # layer_manager.reader.close
-          touchpad_writer.close
+          fusuma_writer.close
         end
 
         class TouchpadSelector

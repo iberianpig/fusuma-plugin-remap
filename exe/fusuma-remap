@@ -14,6 +14,7 @@ require "irb"
 Fusuma::MultiLogger.instance.debug_mode = true
 Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
 
+# FIXME: use OptionParser and implement help
 if ARGV.length < 1
   puts "you can specify keyboard name pattern and touchpad name pattern"
   puts "$ #{$PROGRAM_NAME} 'AT Translated Set 2 keyboard' 'SynPS/2 Synaptics TouchPad'"
@@ -37,7 +38,7 @@ end
 
 @layer_manager = Fusuma::Plugin::Remap::LayerManager.instance
 
-keyboard_reader, keyboard_writer = IO.pipe
+keyboard_reader, fusuma_writer = IO.pipe
 
 layers = Fusuma::Config.instance.keymap.select { |m| m[:context] && m[:remap] }.map { |m| m[:context] }.uniq
 Thread.new do
@@ -86,7 +87,7 @@ end
 
 Fusuma::Plugin::Remap::KeyboardRemapper.new(
   layer_manager: @layer_manager,
-  keyboard_writer: keyboard_writer,
+  fusuma_writer: fusuma_writer,
   source_keyboards: source_keyboards,
   internal_touchpad: internal_touchpad
 ).run

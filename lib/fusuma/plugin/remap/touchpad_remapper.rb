@@ -12,11 +12,12 @@ module Fusuma
 
         VIRTUAL_TOUCHPAD_NAME = "fusuma_virtual_touchpad"
 
-        # @param touchpad_writer [IO]
+        # @param fusuma_writer [IO]
         # @param source_touchpad [Revdev::Device]
-        def initialize(touchpad_writer:, source_touchpad:)
+        def initialize(fusuma_writer:, source_touchpad:)
           @source_touchpad = source_touchpad # original touchpad
-          @touchpad = touchpad_writer # write event to fusuma_input
+          @fusuma_writer = fusuma_writer # write event to fusuma_input
+          @palm_detector ||= PalmDetection.new(source_touchpad)
         end
 
         # TODO: grab touchpad events and remap them
@@ -136,7 +137,7 @@ module Fusuma
               if @status != @prev_status
                 @prev_status = @status
                 data = {status: @status, finger: @finger_state, touch_state: @touch_state}
-                @touchpad.write(data.to_msgpack)
+                @fusuma_writer.write(data.to_msgpack)
               end
             end
           end

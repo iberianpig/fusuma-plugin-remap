@@ -13,12 +13,12 @@ module Fusuma
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
 
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
-        # @param keyboard_writer [IO]
+        # @param fusuma_writer [IO]
         # @param source_keyboards [Array<Revdev::Device>]
         # @param internal_touchpad [Revdev::Device]
-        def initialize(layer_manager:, keyboard_writer:, source_keyboards:, internal_touchpad:)
+        def initialize(layer_manager:, fusuma_writer:, source_keyboards:, internal_touchpad:)
           @layer_manager = layer_manager # request to change layer
-          @keyboard_writer = keyboard_writer # write event to original keyboard
+          @fusuma_writer = fusuma_writer # write event to original keyboard
           @source_keyboards = source_keyboards # original keyboard
           @internal_touchpad = internal_touchpad # internal touchpad
         end
@@ -26,6 +26,8 @@ module Fusuma
         def run
           create_virtual_keyboard
           set_trap
+          # TODO: Extract to a configuration file or make it optional
+          #       it should stop other remappers
           set_emergency_ungrab_keybinds("RIGHTCTRL", "LEFTCTRL")
           grab_keyboards
 
@@ -63,7 +65,7 @@ module Fusuma
               if input_event.value != 2 # repeat
                 data = {key: input_key, status: input_event.value, layer: @layer_manager.current_layer}
                 packed = data.to_msgpack
-                @keyboard_writer.puts(packed)
+                @fusuma_writer.puts(packed)
               end
             end
 
