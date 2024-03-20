@@ -29,24 +29,16 @@ module Fusuma
           @fusuma_reader
         end
 
-        # @param record [String]
-        # @return [Event]
-        def create_event(record:)
-          data = MessagePack.unpack(record) # => {"key"=>"J", "status"=>1}
+        # override Input#read_from_io
+        # @return [Record]
+        def read_from_io
+          @unpacker ||= MessagePack::Unpacker.new(io)
+          data = @unpacker.unpack
 
-          unless data.is_a? Hash
-            MultiLogger.error("Invalid record: #{record}", data: data)
-            return
-          end
+          raise "data is not Hash : #{data}" unless data.is_a? Hash
 
-          code = data["key"]
           status = (data["status"] == 1) ? "pressed" : "released"
-          layer = data["layer"]
-          record = Events::Records::KeypressRecord.new(status: status, code: code, layer: layer)
-
-          e = Events::Event.new(tag: tag, record: record)
-          MultiLogger.debug(input_event: e)
-          e
+          Events::Records::KeypressRecord.new(status: status, code: data["key"], layer: data["layer"])
         end
 
         private

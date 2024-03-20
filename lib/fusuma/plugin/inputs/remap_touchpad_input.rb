@@ -28,6 +28,7 @@ module Fusuma
           @fusuma_reader
         end
 
+        # override Input#read_from_io
         # @return [Record]
         def read_from_io
           @unpacker ||= MessagePack::Unpacker.new(io)

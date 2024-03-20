@@ -23,7 +23,7 @@ module Fusuma
 
           @last_layer = layer
           @last_remove = remove
-          @writer.puts({layer: layer, remove: remove}.to_msgpack)
+          @writer.write({layer: layer, remove: remove}.to_msgpack)
         end
 
         # Read layer from pipe and return remap layer

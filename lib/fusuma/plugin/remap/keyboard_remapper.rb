@@ -63,9 +63,8 @@ module Fusuma
 
               old_ie = input_event
               if input_event.value != 2 # repeat
-                data = {key: input_key, status: input_event.value, layer: @layer_manager.current_layer}
-                packed = data.to_msgpack
-                @fusuma_writer.puts(packed)
+                data = {key: input_key, status: input_event.value, layer: layer}
+                @fusuma_writer.write(data.to_msgpack)
               end
             end
 
