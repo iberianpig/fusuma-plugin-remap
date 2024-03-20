@@ -38,16 +38,24 @@ module Fusuma
 
           gesture = "touch"
           finger = data["finger"]
-          status = case data["status"]
-          when 0
-            "end"
-          when 1
-            "begin"
-            # when 2 # TODO: support update
-            #   "update"
-          end
 
-          Events::Records::GestureRecord.new(status: status, gesture: gesture, finger: finger, delta: nil)
+          # @touch_state ||= {}
+          # @mt_slot ||= 0
+          # @touch_state[@mt_slot] ||= {
+          #   MT_TRACKING_ID: nil,
+          #   X: nil,
+          #   Y: nil,
+          #   valid_touch_point: false
+          # }
+          # TODO: implement update touch_state
+          status =
+            if data["touch_state"].any? { |_, v| v["valid_touch_point"] }
+              "begin"
+            else
+              "end"
+            end
+
+          Events::Records::GestureRecord.new(gesture: gesture, status: status, finger: finger, delta: nil)
         end
 
         private

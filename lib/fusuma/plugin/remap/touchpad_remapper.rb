@@ -24,6 +24,10 @@ module Fusuma
         #       send remapped events to virtual touchpad or virtual mouse
         def run
           create_virtual_touchpad
+
+          touch_state = {}
+          mt_slot = 0
+          finger_state = nil
           loop do
             IO.select([@source_touchpad.file]) # , @layer_manager.reader])
 
@@ -47,33 +51,24 @@ module Fusuma
             # Event: time 1698456258.382693, -------------- SYN_REPORT ------------
             input_event = @source_touchpad.read_input_event
 
-            @touch_state ||= {}
-            @mt_slot ||= 0
-            @touch_state[@mt_slot] ||= {
-              MT_TRACKING_ID: nil,
-              X: nil,
-              Y: nil,
-              valid_touch_point: false
-            }
-            @finger_state ||= nil
-            @syn_report = nil
-            @button_touch ||= nil
+            touch_state[mt_slot] ||= {MT_TRACKING_ID: nil, X: nil, Y: nil, valid_touch_point: false}
+            syn_report = nil
 
             case input_event.type
             when Revdev::EV_ABS
               case input_event.code
               when Revdev::ABS_MT_SLOT
-                @mt_slot = input_event.value
-                @touch_state[@mt_slot] ||= {}
+                mt_slot = input_event.value
+                touch_state[mt_slot] ||= {}
               when Revdev::ABS_MT_TRACKING_ID
-                @touch_state[@mt_slot][:MT_TRACKING_ID] = input_event.value
+                touch_state[mt_slot][:MT_TRACKING_ID] = input_event.value
                 if input_event.value == -1
-                  @touch_state[@mt_slot] = {}
+                  touch_state[mt_slot] = {}
                 end
               when Revdev::ABS_MT_POSITION_X
-                @touch_state[@mt_slot][:X] = input_event.value
+                touch_state[mt_slot][:X] = input_event.value
               when Revdev::ABS_MT_POSITION_Y
-                @touch_state[@mt_slot][:Y] = input_event.value
+                touch_state[mt_slot][:Y] = input_event.value
               when Revdev::ABS_X, Revdev::ABS_Y
                 # ignore
               when Revdev::ABS_MT_PRESSURE
@@ -88,57 +83,46 @@ module Fusuma
               when Revdev::BTN_TOUCH
                 # ignore
               when Revdev::BTN_TOOL_FINGER
-                @finger_state = (input_event.value == 1) ? 1 : nil
+                finger_state = (input_event.value == 1) ? 1 : 0
               when Revdev::BTN_TOOL_DOUBLETAP
-                @finger_state = (input_event.value == 1) ? 2 : nil
+                finger_state = (input_event.value == 1) ? 2 : 1
               when Revdev::BTN_TOOL_TRIPLETAP
-                @finger_state = (input_event.value == 1) ? 3 : nil
+                finger_state = (input_event.value == 1) ? 3 : 2
               when Revdev::BTN_TOOL_QUADTAP
-                @finger_state = (input_event.value == 1) ? 4 : nil
+                finger_state = (input_event.value == 1) ? 4 : 3
               when 0x148 # define BTN_TOOL_QUINTTAP	0x148	/* Five fingers on trackpad */
-                @finger_state = (input_event.value == 1) ? 5 : nil
+                finger_state = (input_event.value == 1) ? 5 : 4
               end
             when Revdev::EV_MSC
               case input_event.code
               when 0x05 # define MSC_TIMESTAMP		0x05
-                @current_timestamp = input_event.value
+                # ignore
+                # current_timestamp = input_event.value
               end
             when Revdev::EV_SYN
               case input_event.code
               when Revdev::SYN_REPORT
-                @syn_report = input_event.value
+                syn_report = input_event.value
+              when Revdev::SYN_DROPPED
+                MultiLogger.error "Dropped: #{input_event.value}"
               else
-                raise "unhandled event"
+                raise "unhandled event", "#{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
               end
             else
-              pp [input_event.hr_type, input_event.hr_code, input_event.value]
-              raise "unhandled event"
+              raise "unhandled event", "#{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
             end
 
             # TODO:
             # Remember the most recent valid touch position and exclude it if it is close to that position
             # For example, when dragging, it is possible to touch around the edge of the touchpad again after reaching the edge of the touchpad, so in that case, you do not want to execute palm detection
-            if @touch_state[@mt_slot][:valid_touch_point] != true
-              @touch_state[@mt_slot][:valid_touch_point] = @palm_detector.palm?(@touch_state[@mt_slot])
+            if touch_state[mt_slot][:valid_touch_point] != true
+              touch_state[mt_slot][:valid_touch_point] = @palm_detector.palm?(touch_state[mt_slot])
             end
 
-            if @syn_report
-              @syn_report = nil
-
-              # TODO: refactor Thumbsense specific logic: Event suppression
-              @status = if @touch_state.any? { |k, v| v[:valid_touch_point] }
-                1
-              else
-                0
-              end
-
-              # TODO: send begin/update/end events
-              # Send events only when status changes from 0 to 1 or from 1 to 0
-              if @status != @prev_status
-                @prev_status = @status
-                data = {status: @status, finger: @finger_state, touch_state: @touch_state}
-                @fusuma_writer.write(data.to_msgpack)
-              end
+            if syn_report
+              # TODO: define format as fusuma_input
+              data = {finger: finger_state, touch_state: touch_state}
+              @fusuma_writer.write(data.to_msgpack)
             end
           end
         end

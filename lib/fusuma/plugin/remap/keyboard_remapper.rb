@@ -32,6 +32,7 @@ module Fusuma
           grab_keyboards
 
           old_ie = nil
+          layer = nil
           next_mapping = nil
           current_mapping = {}
 
@@ -40,11 +41,12 @@ module Fusuma
             io = ios.first.first
 
             if io == @layer_manager.reader
-              @layer_manager.receive_layer
+              layer = @layer_manager.receive_layer # update @current_layer
+              if layer.nil?
+                next
+              end
 
-              MultiLogger.debug "Remapper#run: layer changed to #{@layer_manager.current_layer}"
-              next_mapping = @layer_manager.find_mapping
-              MultiLogger.debug "Remapper#run: next_mapping: #{next_mapping}"
+              next_mapping = @layer_manager.find_mapping(layer)
               next
             end
 
