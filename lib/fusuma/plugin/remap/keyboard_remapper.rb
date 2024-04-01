@@ -14,22 +14,16 @@ module Fusuma
 
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
         # @param fusuma_writer [IO]
-        # @param source_keyboards [Array<Revdev::Device>]
-        # @param internal_touchpad [Revdev::Device]
-        def initialize(layer_manager:, fusuma_writer:, source_keyboards:, internal_touchpad:)
+        # @param config [Hash]
+        def initialize(layer_manager:, fusuma_writer:, config: {})
           @layer_manager = layer_manager # request to change layer
           @fusuma_writer = fusuma_writer # write event to original keyboard
-          @source_keyboards = source_keyboards # original keyboard
-          @internal_touchpad = internal_touchpad # internal touchpad
+          @config = config
         end
 
         def run
           create_virtual_keyboard
-          set_trap
-          # TODO: Extract to a configuration file or make it optional
-          #       it should stop other remappers
-          set_emergency_ungrab_keybinds("RIGHTCTRL", "LEFTCTRL")
-          grab_keyboards
+          @source_keyboards = reload_keyboards
 
           old_ie = nil
           layer = nil
@@ -91,16 +85,32 @@ module Fusuma
             next if remapped_event.code.nil?
 
             uinput_keyboard.write_input_event(remapped_event)
+          rescue Errno::ENODEV => e # device is removed
+            MultiLogger.error "Device is removed: #{e.message}"
+            @source_keyboards = reload_keyboards
           end
-        rescue Errno::ENODEV => e # device is removed
-          MultiLogger.error e.message
         rescue EOFError => e # device is closed
-          MultiLogger.error e.message
+          MultiLogger.error "Device is closed: #{e.message}"
         ensure
           @destroy.call
         end
 
         private
+
+        def reload_keyboards
+          source_keyboards = KeyboardSelector.new(@config[:keyboard_name_patterns]).select
+
+          MultiLogger.info("Reload keyboards: #{source_keyboards.map(&:device_name)}")
+
+          set_trap(source_keyboards)
+          # TODO: Extract to a configuration file or make it optional
+          #       it should stop other remappers
+          set_emergency_ungrab_keybinds("RIGHTCTRL", "LEFTCTRL")
+          grab_keyboards(source_keyboards)
+        rescue => e
+          MultiLogger.error "Failed to reload keyboards: #{e.message}"
+          MultiLogger.error e.backtrace.join("\n")
+        end
 
         def uinput_keyboard
           @uinput_keyboard ||= UinputKeyboard.new("/dev/uinput")
@@ -133,6 +143,14 @@ module Fusuma
         end
 
         def create_virtual_keyboard
+          touchpad_name_patterns = @config[:touchpad_name_patterns]
+          internal_touchpad = TouchpadSelector.new(touchpad_name_patterns).select.first
+
+          if internal_touchpad.nil?
+            MultiLogger.error("No touchpad found: #{touchpad_name_patterns}")
+            exit
+          end
+
           MultiLogger.info "Create virtual keyboard: #{VIRTUAL_KEYBOARD_NAME}"
 
           uinput_keyboard.create VIRTUAL_KEYBOARD_NAME,
@@ -144,15 +162,15 @@ module Fusuma
               #
               {
                 bustype: Revdev::BUS_I8042,
-                vendor: @internal_touchpad.device_id.vendor,
-                product: @internal_touchpad.device_id.product,
-                version: @internal_touchpad.device_id.version
+                vendor: internal_touchpad.device_id.vendor,
+                product: internal_touchpad.device_id.product,
+                version: internal_touchpad.device_id.version
               }
             )
         end
 
-        def grab_keyboards
-          @source_keyboards.each do |keyboard|
+        def grab_keyboards(keyboards)
+          keyboards.each do |keyboard|
             wait_release_all_keys(keyboard)
             begin
               keyboard.grab
@@ -163,9 +181,10 @@ module Fusuma
           end
         end
 
-        def set_trap
+        # @param [Array<Revdev::EventDevice>] keyboards
+        def set_trap(keyboards)
           @destroy = lambda do
-            @source_keyboards.each do |kbd|
+            keyboards.each do |kbd|
               kbd.ungrab
             rescue Errno::EINVAL
             rescue Errno::ENODEV
@@ -270,6 +289,47 @@ module Fusuma
               # wait until all keys are released
               device.read_input_event
             end
+          end
+        end
+
+        # Devices to detect key presses and releases
+        class KeyboardSelector
+          def initialize(names = ["keyboard", "Keyboard", "KEYBOARD"])
+            @names = names
+          end
+
+          # Select devices that match the name
+          # If no device is found, it will wait for 3 seconds and try again
+          # @return [Array<Revdev::EventDevice>]
+          def select
+            loop do
+              Fusuma::Device.reset
+              devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
+              if devices.empty?
+                sleep 3
+                next
+              end
+
+              return devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
+            end
+          end
+        end
+
+        class TouchpadSelector
+          def initialize(names = nil)
+            @names = names
+          end
+
+          # @return [Array<Revdev::EventDevice>]
+          def select
+            devices = if @names
+              Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
+            else
+              # available returns only touchpad devices
+              Fusuma::Device.available
+            end
+
+            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
           end
         end
       end
