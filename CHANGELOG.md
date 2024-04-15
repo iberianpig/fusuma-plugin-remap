@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.4.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.4.0) (2024-04-15)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.3.1...v0.4.0)
+
+**Implemented enhancements:**
+
+- feat/debug mode [\#2](https://github.com/iberianpig/fusuma-plugin-remap/pull/2) ([iberianpig](https://github.com/iberianpig))
+
+**Fixed bugs:**
+
+- Remapping Does Not Work When Target Keyboard is Not Found [\#3](https://github.com/iberianpig/fusuma-plugin-remap/issues/3)
+
+**Merged pull requests:**
+
+- Wait for device removal and reload keyboard [\#5](https://github.com/iberianpig/fusuma-plugin-remap/pull/5) ([iberianpig](https://github.com/iberianpig))
+- Palm Rejection for Touchpad [\#4](https://github.com/iberianpig/fusuma-plugin-remap/pull/4) ([iberianpig](https://github.com/iberianpig))
+
 ## [v0.3.1](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.3.1) (2023-09-04)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.3.0...v0.3.1)
