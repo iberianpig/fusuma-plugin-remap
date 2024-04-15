@@ -109,10 +109,10 @@ class UinputTouchpad < Ruinput::UinputDevice
     @file.ioctl UI_SET_EVBIT, Revdev::EV_ABS
     Revdev::ABS_CNT.times do |i|
       if touchpad_abs.include?(i)
-        puts "setting #{i} (#{Revdev::REVERSE_MAPS[:ABS][i]})"
+        # puts "setting #{i} (#{Revdev::REVERSE_MAPS[:ABS][i]})"
         @file.ioctl UI_SET_ABSBIT, i
       else
-        puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:ABS][i]})"
+        # puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:ABS][i]})"
       end
     end
 
@@ -126,10 +126,10 @@ class UinputTouchpad < Ruinput::UinputDevice
     @file.ioctl UI_SET_EVBIT, Revdev::EV_REL
     Revdev::REL_CNT.times do |i|
       if touchpad_rels.include?(i)
-        puts "setting #{i} (#{Revdev::REVERSE_MAPS[:REL][i]})"
+        # puts "setting #{i} (#{Revdev::REVERSE_MAPS[:REL][i]})"
         @file.ioctl UI_SET_RELBIT, i
       else
-        puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:REL][i]})"
+        # puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:REL][i]})"
       end
     end
 
