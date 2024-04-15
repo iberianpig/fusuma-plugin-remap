@@ -1,19 +1,18 @@
 # frozen_string_literal: true
 
 require "fusuma/device"
-require_relative "../remap/keyboard_remapper"
-require_relative "../remap/layer_manager"
+require_relative "../remap/touchpad_remapper"
+# require_relative "../remap/layer_manager"
 
 module Fusuma
   module Plugin
     module Inputs
-      # Get keyboard events from remapper
-      class RemapKeyboardInput < Input
+      # Get touchpad events from remapper
+      class RemapTouchpadInput < Input
         include CustomProcess
 
         def config_param_types
           {
-            keyboard_name_patterns: [Array, String],
             touchpad_name_patterns: [Array, String]
           }
         end
@@ -37,19 +36,31 @@ module Fusuma
 
           raise "data is not Hash : #{data}" unless data.is_a? Hash
 
-          status = (data["status"] == 1) ? "pressed" : "released"
-          Events::Records::KeypressRecord.new(status: status, code: data["key"], layer: data["layer"])
+          gesture = "touch"
+          finger = data["finger"]
+
+          # @touch_state ||= {}
+          # @mt_slot ||= 0
+          # @touch_state[@mt_slot] ||= {
+          #   MT_TRACKING_ID: nil,
+          #   X: nil,
+          #   Y: nil,
+          #   valid_touch_point: false
+          # }
+          # TODO: implement update touch_state
+          status =
+            if data["touch_state"].any? { |_, v| v["valid_touch_point"] }
+              "begin"
+            else
+              "end"
+            end
+
+          Events::Records::GestureRecord.new(gesture: gesture, status: status, finger: finger, delta: nil)
         end
 
         private
 
         def setup_remapper
-          source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
-          if source_keyboards.empty?
-            MultiLogger.error("No keyboard found: #{config_params(:keyboard_name_patterns)}")
-            exit
-          end
-
           internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
           if internal_touchpad.nil?
             MultiLogger.error("No touchpad found: #{config_params(:touchpad_name_patterns)}")
@@ -57,40 +68,25 @@ module Fusuma
           end
 
           MultiLogger.info("set up remapper")
-          MultiLogger.info("source_keyboards: #{source_keyboards.map(&:device_name)}")
           MultiLogger.info("internal_touchpad: #{internal_touchpad.device_name}")
 
-          layer_manager = Remap::LayerManager.instance
+          # layer_manager = Remap::LayerManager.instance
 
-          # physical keyboard input event
+          # physical touchpad input event
           @fusuma_reader, fusuma_writer = IO.pipe
 
           @pid = fork do
-            layer_manager.writer.close
+            # layer_manager.writer.close
             @fusuma_reader.close
-            remapper = Remap::KeyboardRemapper.new(
-              layer_manager: layer_manager,
-              source_keyboards: source_keyboards,
+            remapper = Remap::TouchpadRemapper.new(
+              # layer_manager: layer_manager,
               fusuma_writer: fusuma_writer,
-              internal_touchpad: internal_touchpad
+              source_touchpad: internal_touchpad
             )
             remapper.run
           end
-          layer_manager.reader.close
+          # layer_manager.reader.close
           fusuma_writer.close
-        end
-
-        # Devices to detect key presses and releases
-        class KeyboardSelector
-          def initialize(names = ["keyboard", "Keyboard", "KEYBOARD"])
-            @names = names
-          end
-
-          # @return [Array<Revdev::EventDevice>]
-          def select
-            devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
-            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
-          end
         end
 
         class TouchpadSelector

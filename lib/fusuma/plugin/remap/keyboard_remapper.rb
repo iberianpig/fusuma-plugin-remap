@@ -2,24 +2,23 @@ require "revdev"
 require "msgpack"
 require "set"
 require_relative "layer_manager"
-
-require_relative "ruinput_device_patched"
+require_relative "uinput_keyboard"
 
 module Fusuma
   module Plugin
     module Remap
-      class Remapper
+      class KeyboardRemapper
         include Revdev
 
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
 
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
-        # @param keyboard_writer [IO]
+        # @param fusuma_writer [IO]
         # @param source_keyboards [Array<Revdev::Device>]
         # @param internal_touchpad [Revdev::Device]
-        def initialize(layer_manager:, keyboard_writer:, source_keyboards:, internal_touchpad:)
+        def initialize(layer_manager:, fusuma_writer:, source_keyboards:, internal_touchpad:)
           @layer_manager = layer_manager # request to change layer
-          @keyboard_writer = keyboard_writer # write event to original keyboard
+          @fusuma_writer = fusuma_writer # write event to original keyboard
           @source_keyboards = source_keyboards # original keyboard
           @internal_touchpad = internal_touchpad # internal touchpad
         end
@@ -27,10 +26,13 @@ module Fusuma
         def run
           create_virtual_keyboard
           set_trap
+          # TODO: Extract to a configuration file or make it optional
+          #       it should stop other remappers
           set_emergency_ungrab_keybinds("RIGHTCTRL", "LEFTCTRL")
           grab_keyboards
 
           old_ie = nil
+          layer = nil
           next_mapping = nil
           current_mapping = {}
 
@@ -39,11 +41,12 @@ module Fusuma
             io = ios.first.first
 
             if io == @layer_manager.reader
-              @layer_manager.receive_layer
+              layer = @layer_manager.receive_layer # update @current_layer
+              if layer.nil?
+                next
+              end
 
-              MultiLogger.debug "Remapper#run: layer changed to #{@layer_manager.current_layer}"
-              next_mapping = @layer_manager.find_mapping
-              MultiLogger.debug "Remapper#run: next_mapping: #{next_mapping}"
+              next_mapping = @layer_manager.find_mapping(layer)
               next
             end
 
@@ -62,14 +65,14 @@ module Fusuma
 
               old_ie = input_event
               if input_event.value != 2 # repeat
-                packed = {key: input_key, status: input_event.value}.to_msgpack
-                @keyboard_writer.puts(packed)
+                data = {key: input_key, status: input_event.value, layer: layer}
+                @fusuma_writer.write(data.to_msgpack)
               end
             end
 
             remapped = current_mapping.fetch(input_key.to_sym, nil)
             if remapped.nil?
-              uinput.write_input_event(input_event)
+              uinput_keyboard.write_input_event(input_event)
               next
             end
 
@@ -87,7 +90,7 @@ module Fusuma
             # this is because the command will be executed by fusuma process
             next if remapped_event.code.nil?
 
-            uinput.write_input_event(remapped_event)
+            uinput_keyboard.write_input_event(remapped_event)
           end
         rescue Errno::ENODEV => e # device is removed
           MultiLogger.error e.message
@@ -99,8 +102,8 @@ module Fusuma
 
         private
 
-        def uinput
-          @uinput ||= RuinputDevicePatched.new "/dev/uinput"
+        def uinput_keyboard
+          @uinput_keyboard ||= UinputKeyboard.new("/dev/uinput")
         end
 
         def pressed_virtual_keys
@@ -132,11 +135,13 @@ module Fusuma
         def create_virtual_keyboard
           MultiLogger.info "Create virtual keyboard: #{VIRTUAL_KEYBOARD_NAME}"
 
-          uinput.create VIRTUAL_KEYBOARD_NAME,
+          uinput_keyboard.create VIRTUAL_KEYBOARD_NAME,
             Revdev::InputId.new(
-              # recognized as an internal keyboard on libinput,
-              # touchpad is disabled when typing
-              # see: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
+              # disable while typing is enabled when
+              # - Both the keyboard and touchpad are BUS_I8042
+              # - The touchpad and keyboard have the same vendor/product
+              # ref: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
+              #
               {
                 bustype: Revdev::BUS_I8042,
                 vendor: @internal_touchpad.device_id.vendor,
@@ -162,14 +167,13 @@ module Fusuma
           @destroy = lambda do
             @source_keyboards.each do |kbd|
               kbd.ungrab
-              MultiLogger.info "Ungrabbed #{kbd.device_name}"
             rescue Errno::EINVAL
             rescue Errno::ENODEV
               # already ungrabbed
             end
 
             begin
-              uinput.destroy
+              uinput_keyboard.destroy
             rescue IOError
               # already destroyed
             end

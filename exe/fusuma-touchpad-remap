@@ -1,0 +1,42 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fusuma/plugin/inputs/input"
+require_relative "../lib/fusuma/plugin/inputs/remap_touchpad_input"
+require_relative "../lib/fusuma/plugin/remap/version"
+require_relative "../lib/fusuma/plugin/remap/touchpad_remapper"
+require_relative "../lib/fusuma/plugin/remap/layer_manager"
+require "fusuma/config"
+require "fusuma/multi_logger"
+require "revdev"
+require "msgpack"
+require "irb"
+
+Fusuma::MultiLogger.instance.debug_mode = true
+Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
+
+touchpad_name_pattern = ["touchpad", "Touchpad", "TOUCHPAD"]
+
+# $DEBUG=true # puts events
+
+internal_touchpad = Fusuma::Plugin::Inputs::RemapKeyboardInput::TouchpadSelector.new(touchpad_name_pattern).select.first
+
+if internal_touchpad.nil?
+  warn "no touchpad found"
+  exit 1
+end
+
+touchpad_reader, touchpad_writer = IO.pipe
+
+Thread.new do
+  unpacker = MessagePack::Unpacker.new(touchpad_reader)
+  loop do
+    data = unpacker.unpack
+    puts data
+  end
+end
+
+Fusuma::Plugin::Remap::TouchpadRemapper.new(
+  touchpad_writer: touchpad_writer,
+  source_touchpad: internal_touchpad
+).run

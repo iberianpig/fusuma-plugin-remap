@@ -24,8 +24,8 @@ Gem::Specification.new do |spec|
   # https://packages.ubuntu.com/search?keywords=ruby&searchon=names&exact=1&suite=all&section=main
   # support focal (20.04LTS) 2.7
 
-  spec.add_dependency "fusuma", ">= 3.1"
-  spec.add_dependency "fusuma-plugin-keypress", "~> 0.5"
+  spec.add_dependency "fusuma", ">= 3.4"
+  spec.add_dependency "fusuma-plugin-keypress", ">= 0.11.0"
   spec.add_dependency "msgpack"
   spec.add_dependency "revdev"
   spec.add_dependency "ruinput"

@@ -14,21 +14,27 @@ module Fusuma
           @layers = {}
           @reader, @writer = IO.pipe
           @current_layer = {} # preserve order
+          @last_layer = nil
+          @last_remove = nil
         end
 
         # @param [Hash] layer
         # @param [Boolean] remove
         def send_layer(layer:, remove: false)
-          return if @last_layer == layer && @last_remove == remove
+          return if (@last_layer == layer) && (@last_remove == remove)
 
           @last_layer = layer
           @last_remove = remove
-          @writer.puts({layer: layer, remove: remove}.to_msgpack)
+          @writer.write({layer: layer, remove: remove}.to_msgpack)
         end
 
-        # Read layer from pipe and return remap layer
+        # Read layer from pipe and update @current_layer
+        # @return [Hash] current layer
         # @example
-        # @return [Hash]
+        #  receive_layer
+        #  # => { thumbsense: true }
+        #  receive_layer
+        #  # => { thumbsense: true, application: "Google-chrome" }
         def receive_layer
           @layer_unpacker ||= MessagePack::Unpacker.new(@reader)
 
@@ -40,28 +46,28 @@ module Fusuma
           layer = data[:layer] # e.g { thumbsense: true }
           remove = data[:remove] # e.g true
 
+          # update @current_layer
           if remove
             @current_layer.delete_if { |k, _v| layer.key?(k) }
           else
             # If duplicate keys exist, order of keys is preserved
             @current_layer.merge!(layer)
           end
+          @current_layer
         end
 
         # Find remap layer from config
         # @param [Hash] layer
-        # @return [Hash]
-        def find_mapping(layer = @current_layer)
+        # @return [Hash] remap layer
+        def find_mapping(layer)
           @layers[layer] ||= begin
             result = nil
-            _ = Fusuma::Config::Searcher.find_context(layer) {
+            _ = Fusuma::Config::Searcher.find_context(layer) do
               result = Fusuma::Config.search(Fusuma::Config::Index.new(:remap))
               next unless result
 
-              result = result.deep_transform_keys do |key|
-                key.upcase.to_sym
-              end
-            }
+              result = result.deep_transform_keys { |key| key.upcase.to_sym }
+            end
 
             result || {}
           end
