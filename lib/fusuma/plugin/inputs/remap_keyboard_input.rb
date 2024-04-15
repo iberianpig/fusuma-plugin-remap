@@ -44,21 +44,10 @@ module Fusuma
         private
 
         def setup_remapper
-          source_keyboards = KeyboardSelector.new(config_params(:keyboard_name_patterns)).select
-          if source_keyboards.empty?
-            MultiLogger.error("No keyboard found: #{config_params(:keyboard_name_patterns)}")
-            exit
-          end
-
-          internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
-          if internal_touchpad.nil?
-            MultiLogger.error("No touchpad found: #{config_params(:touchpad_name_patterns)}")
-            exit
-          end
-
-          MultiLogger.info("set up remapper")
-          MultiLogger.info("source_keyboards: #{source_keyboards.map(&:device_name)}")
-          MultiLogger.info("internal_touchpad: #{internal_touchpad.device_name}")
+          config = {
+            keyboard_name_patterns: config_params(:keyboard_name_patterns),
+            touchpad_name_patterns: config_params(:touchpad_name_patterns)
+          }
 
           layer_manager = Remap::LayerManager.instance
 
@@ -70,45 +59,13 @@ module Fusuma
             @fusuma_reader.close
             remapper = Remap::KeyboardRemapper.new(
               layer_manager: layer_manager,
-              source_keyboards: source_keyboards,
               fusuma_writer: fusuma_writer,
-              internal_touchpad: internal_touchpad
+              config: config
             )
             remapper.run
           end
           layer_manager.reader.close
           fusuma_writer.close
-        end
-
-        # Devices to detect key presses and releases
-        class KeyboardSelector
-          def initialize(names = ["keyboard", "Keyboard", "KEYBOARD"])
-            @names = names
-          end
-
-          # @return [Array<Revdev::EventDevice>]
-          def select
-            devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
-            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
-          end
-        end
-
-        class TouchpadSelector
-          def initialize(names = nil)
-            @names = names
-          end
-
-          # @return [Array<Revdev::EventDevice>]
-          def select
-            devices = if @names
-              Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
-            else
-              # available returns only touchpad devices
-              Fusuma::Device.available
-            end
-
-            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
-          end
         end
       end
     end
