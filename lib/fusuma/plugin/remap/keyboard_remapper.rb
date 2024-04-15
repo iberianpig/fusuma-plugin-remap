@@ -303,15 +303,20 @@ module Fusuma
           # @return [Array<Revdev::EventDevice>]
           def select
             loop do
-              Fusuma::Device.reset
+              Fusuma::Device.reset # reset cache to get the latest device information
               devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
               if devices.empty?
-                sleep 3
+                wait_for_device
+
                 next
               end
 
               return devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
             end
+          end
+
+          def wait_for_device
+            sleep 3
           end
         end
 
