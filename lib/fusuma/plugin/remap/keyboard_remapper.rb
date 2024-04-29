@@ -302,10 +302,15 @@ module Fusuma
           # If no device is found, it will wait for 3 seconds and try again
           # @return [Array<Revdev::EventDevice>]
           def select
+            displayed_no_keyboard = false
             loop do
               Fusuma::Device.reset # reset cache to get the latest device information
               devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
               if devices.empty?
+                unless displayed_no_keyboard
+                  MultiLogger.warn "No keyboard found: #{@names}"
+                  displayed_no_keyboard = true
+                end
                 wait_for_device
 
                 next

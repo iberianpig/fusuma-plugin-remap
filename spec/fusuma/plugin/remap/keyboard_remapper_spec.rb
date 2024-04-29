@@ -35,9 +35,10 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
           allow(selector).to receive(:loop).and_yield
           allow(Fusuma::Device).to receive(:all).and_return([])
         end
-        it "wait for device" do
-          expect(selector).to receive(:loop).and_yield
+
+        it "wait for device, and logs warn message" do
           expect(selector).to receive(:wait_for_device)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/No keyboard found/)
           selector.select
         end
       end
