@@ -56,6 +56,10 @@ module Fusuma
             end
 
           Events::Records::GestureRecord.new(gesture: gesture, status: status, finger: finger, delta: nil)
+        rescue EOFError => e
+          MultiLogger.error "#{self.class.name}: #{e}"
+          MultiLogger.error "Shutdown fusuma process..."
+          Process.kill("TERM", Process.pid)
         end
 
         private

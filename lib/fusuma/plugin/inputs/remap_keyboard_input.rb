@@ -39,6 +39,10 @@ module Fusuma
 
           status = (data["status"] == 1) ? "pressed" : "released"
           Events::Records::KeypressRecord.new(status: status, code: data["key"], layer: data["layer"])
+        rescue EOFError => e
+          MultiLogger.error "#{self.class.name}: #{e}"
+          MultiLogger.error "Shutdown fusuma process..."
+          Process.kill("TERM", Process.pid)
         end
 
         private
