@@ -18,8 +18,6 @@ module Fusuma
           }
         end
 
-        attr_reader :pid
-
         def initialize
           super
           setup_remapper
@@ -49,6 +47,7 @@ module Fusuma
 
         def setup_remapper
           config = {
+
             keyboard_name_patterns: config_params(:keyboard_name_patterns),
             touchpad_name_patterns: config_params(:touchpad_name_patterns)
           }
@@ -58,7 +57,7 @@ module Fusuma
           # physical keyboard input event
           @fusuma_reader, fusuma_writer = IO.pipe
 
-          @pid = fork do
+          fork do
             layer_manager.writer.close
             @fusuma_reader.close
             remapper = Remap::KeyboardRemapper.new(

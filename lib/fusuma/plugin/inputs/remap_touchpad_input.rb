@@ -17,8 +17,6 @@ module Fusuma
           }
         end
 
-        attr_reader :pid
-
         def initialize
           super
           setup_remapper
@@ -79,7 +77,7 @@ module Fusuma
           # physical touchpad input event
           @fusuma_reader, fusuma_writer = IO.pipe
 
-          @pid = fork do
+          fork do
             # layer_manager.writer.close
             @fusuma_reader.close
             remapper = Remap::TouchpadRemapper.new(
