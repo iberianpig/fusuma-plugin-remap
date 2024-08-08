@@ -92,7 +92,7 @@ module Fusuma
         rescue EOFError => e # device is closed
           MultiLogger.error "Device is closed: #{e.message}"
         ensure
-          @destroy.call
+          @destroy&.call
         end
 
         private

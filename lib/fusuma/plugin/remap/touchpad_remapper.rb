@@ -18,6 +18,8 @@ module Fusuma
           @source_touchpad = source_touchpad # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
           @palm_detector ||= PalmDetection.new(source_touchpad)
+
+          set_trap
         end
 
         # TODO: grab touchpad events and remap them
@@ -125,6 +127,10 @@ module Fusuma
               @fusuma_writer.write(data.to_msgpack)
             end
           end
+        rescue => e
+          MultiLogger.error "An error occurred: #{e.message}"
+        ensure
+          @destroy&.call
         end
 
         private
@@ -134,9 +140,22 @@ module Fusuma
         end
 
         def create_virtual_touchpad
-          MultiLogger.info "Create virtual keyboard: #{VIRTUAL_TOUCHPAD_NAME}"
-
+          MultiLogger.info "Create virtual touchpad: #{VIRTUAL_TOUCHPAD_NAME}"
           uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpad)
+        end
+
+        def set_trap
+          @destroy = lambda do
+            begin
+              uinput.destroy
+            rescue IOError
+              # already destroyed
+            end
+            exit 0
+          end
+
+          Signal.trap(:INT) { @destroy.call }
+          Signal.trap(:TERM) { @destroy.call }
         end
 
         # Detect palm touch
