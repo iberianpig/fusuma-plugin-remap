@@ -80,7 +80,7 @@ You can configure the emergency stop key in your Fusuma configuration file (`~/.
 plugin:
   inputs:
     remap_keyboard_input:
-      emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL # keybind
+      emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL # <- Set two keys separated by '+' to trigger the emergency stop
 ```
 
 This configuration allows you to specify which keys will trigger the emergency stop functionality.
