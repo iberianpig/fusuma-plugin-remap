@@ -13,6 +13,7 @@ module Fusuma
 
         def config_param_types
           {
+            emergency_ungrab_keys: [String],
             keyboard_name_patterns: [Array, String],
             touchpad_name_patterns: [Array, String]
           }
@@ -47,7 +48,7 @@ module Fusuma
 
         def setup_remapper
           config = {
-
+            emergency_ungrab_keys: config_params(:emergency_ungrab_keys),
             keyboard_name_patterns: config_params(:keyboard_name_patterns),
             touchpad_name_patterns: config_params(:touchpad_name_patterns)
           }

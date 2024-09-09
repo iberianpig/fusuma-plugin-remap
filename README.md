@@ -65,12 +65,26 @@ remap:
   SPACE: BTN_LEFT
 ```
 
-## Emergency stop keybind for virtual keyboard
+## Emergency Stop Keybind for Virtual Keyboard
 
-This is a special keybind for emergency stop. 
-If you press following keybind, physical keyboard will be ungrabbed and Fusuma process will be terminated.
+This plugin includes a special keybind for emergency stop. Pressing this key combination will ungrab the physical keyboard and terminate the Fusuma process. This feature is particularly useful in situations where the plugin or system becomes unresponsive.
 
-<kbd>RIGHTCTRL</kbd> → <kbd>LEFTCTRL</kbd>
+### How to Use
+To execute the emergency stop, press the following key combination(default):
+- <kbd>RIGHTCTRL</kbd> → <kbd>LEFTCTRL</kbd>
+
+### Configuration Example
+You can configure the emergency stop key in your Fusuma configuration file (`~/.config/fusuma/config.yml`) as follows:
+
+```yaml
+plugin:
+  inputs:
+    remap_keyboard_input:
+      emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL # keybind
+```
+
+This configuration allows you to specify which keys will trigger the emergency stop functionality.
+It is important to verify this keybind to ensure a swift response during unexpected situations.
 
 ## Contributing
 

@@ -5,6 +5,14 @@ require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
   describe "#initialize" do
+    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
+    let(:fusuma_writer) { double("fusuma_writer") }
+    let(:config) { {emergency_ungrab_keys: "RIGHTCTRL+LEFTCTRL"} }
+    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+
+    it "initializes with correct config parameters" do
+      expect(remapper.instance_variable_get(:@config)).to include(emergency_ungrab_keys: "RIGHTCTRL+LEFTCTRL")
+    end
   end
 
   describe "#run" do
@@ -24,6 +32,7 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
           allow(Fusuma::Device).to receive(:all).and_return([Fusuma::Device.new(name: "dummy_valid_device", id: "dummy")])
           allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
         end
+
         it "should be Array of Revdev::EventDevice" do
           expect(selector.select).to be_a_kind_of(Array)
           expect(selector.select.first).to eq(event_device)

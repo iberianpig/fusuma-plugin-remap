@@ -103,9 +103,7 @@ module Fusuma
           MultiLogger.info("Reload keyboards: #{source_keyboards.map(&:device_name)}")
 
           set_trap(source_keyboards)
-          # TODO: Extract to a configuration file or make it optional
-          #       it should stop other remappers
-          set_emergency_ungrab_keybinds("RIGHTCTRL", "LEFTCTRL")
+          set_emergency_ungrab_keys(@config[:emergency_ungrab_keys])
           grab_keyboards(source_keyboards)
         rescue => e
           MultiLogger.error "Failed to reload keyboards: #{e.message}"
@@ -174,9 +172,9 @@ module Fusuma
             wait_release_all_keys(keyboard)
             begin
               keyboard.grab
-              MultiLogger.info "Grabbed #{keyboard.device_name}"
+              MultiLogger.info "Grabbed keyboard: #{keyboard.device_name}"
             rescue Errno::EBUSY
-              MultiLogger.error "Failed to grab #{keyboard.device_name}"
+              MultiLogger.error "Failed to grab keyboard: #{keyboard.device_name}"
             end
           end
         end
@@ -205,14 +203,31 @@ module Fusuma
         end
 
         # Emergency stop keybind for virtual keyboard
-        def set_emergency_ungrab_keybinds(first_key, second_key)
-          first_keycode = find_code_from_key(first_key)
-          second_keycode = find_code_from_key(second_key)
-          MultiLogger.info "Emergency ungrab keybind: #{first_key} + #{second_key}"
+        def set_emergency_ungrab_keys(keybind_string)
+          keybinds = keybind_string&.split("+")
+          # TODO: Extract to a configuration file or make it optional
+          #       it should stop other remappers
+          if keybinds&.size != 2
+            MultiLogger.error "Invalid emergency ungrab keybinds: #{keybinds}"
+            MultiLogger.error "Please set two keys separated by '+'"
+            MultiLogger.error <<~YAML
+              plugin:
+                inputs:
+                  remap_keyboard_input:
+                    emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL
+            YAML
+
+            exit 1
+          end
+
+          MultiLogger.info "Emergency ungrab keybind: #{keybinds[0]}+#{keybinds[1]}"
+
+          first_keycode = find_code_from_key(keybinds[0])
+          second_keycode = find_code_from_key(keybinds[1])
 
           @emergency_stop = lambda do |prev, current|
             if (prev&.code == first_keycode && prev.value != 0) && (current.code == second_keycode && current.value != 0)
-              MultiLogger.info "Emergency ungrab keybind: #{first_key} + #{second_key}"
+              MultiLogger.info "Emergency ungrab keybind is pressed: #{keybinds[0]}+#{keybinds[1]}"
               @destroy.call
             end
           end
@@ -278,7 +293,7 @@ module Fusuma
         def released_all_keys?(device)
           # key status if all bytes are 0, the key is not pressed
           bytes = device.read_ioctl_with(Revdev::EVIOCGKEY)
-          bytes.unpack("C*").all? { |byte| byte == 0 }
+          bytes.unpack("C*").all?(0)
         end
 
         def wait_release_all_keys(device, &block)
