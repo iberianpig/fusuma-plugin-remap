@@ -48,8 +48,10 @@ module Fusuma
 
           # update @current_layer
           if remove
+            MultiLogger.debug "Remove layer: #{layer}"
             @current_layer.delete_if { |k, _v| layer.key?(k) }
           else
+            MultiLogger.debug "Add layer: #{layer}"
             # If duplicate keys exist, order of keys is preserved
             @current_layer.merge!(layer)
           end
