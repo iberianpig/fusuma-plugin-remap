@@ -26,6 +26,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "fusuma", ">= 3.4"
   spec.add_dependency "fusuma-plugin-keypress", ">= 0.11.0"
+  spec.add_dependency "fusuma-plugin-sendkey", ">= 0.12.0"
   spec.add_dependency "msgpack"
   spec.add_dependency "revdev"
   spec.add_dependency "ruinput"

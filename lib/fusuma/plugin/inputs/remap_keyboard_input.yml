@@ -8,4 +8,6 @@ plugin:
       source: remap_keyboard_input
   executors:
     sendkey_executor:
-      device_name: fusuma_virtual_keyboard
+      device_name: 
+        - fusuma_virtual_keyboard
+        - keyboard|Keyboard|KEYBOARD
