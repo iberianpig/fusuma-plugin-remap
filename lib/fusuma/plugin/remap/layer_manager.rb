@@ -8,6 +8,7 @@ module Fusuma
       class LayerManager
         require "singleton"
         include Singleton
+
         attr_reader :reader, :writer, :current_layer, :layers
 
         def initialize
