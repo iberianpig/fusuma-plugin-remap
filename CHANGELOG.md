@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.9.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.9.0) (2025-02-19)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.8.0...v0.9.0)
+
+**Closed issues:**
+
+- Build errors [\#6](https://github.com/iberianpig/fusuma-plugin-remap/issues/6)
+
+## [v0.8.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.8.0) (2024-09-21)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.6.0...v0.8.0)
+
 ## [v0.6.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.6.0) (2024-09-09)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.5.0...v0.6.0)
