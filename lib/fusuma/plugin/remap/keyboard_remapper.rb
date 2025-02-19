@@ -320,7 +320,11 @@ module Fusuma
             displayed_no_keyboard = false
             loop do
               Fusuma::Device.reset # reset cache to get the latest device information
-              devices = Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
+              devices = Fusuma::Device.all.select do |d|
+                next if d.name == VIRTUAL_KEYBOARD_NAME
+
+                Array(@names).any? { |name| d.name =~ /#{name}/ }
+              end
               if devices.empty?
                 unless displayed_no_keyboard
                   MultiLogger.warn "No keyboard found: #{@names}"

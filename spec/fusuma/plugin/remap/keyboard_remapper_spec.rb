@@ -25,17 +25,25 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
   describe Fusuma::Plugin::Remap::KeyboardRemapper::KeyboardSelector do
     describe "#select" do
       let(:selector) { described_class.new(["dummy_valid_device"]) }
-      let(:event_device) { double(Revdev::EventDevice) }
+      let(:event_device) { double(Revdev::EventDevice, name: "dummy_valid_device") }
 
       context "with find devices" do
         before do
-          allow(Fusuma::Device).to receive(:all).and_return([Fusuma::Device.new(name: "dummy_valid_device", id: "dummy")])
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "dummy_valid_device", id: "dummy"),
+            Fusuma::Device.new(name: "dummy_virtual_keyboard", id: "dummy-virtual")
+          ])
           allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
         end
 
         it "should be Array of Revdev::EventDevice" do
           expect(selector.select).to be_a_kind_of(Array)
           expect(selector.select.first).to eq(event_device)
+        end
+
+        it "should except virtual devices" do
+          stub_const("Fusuma::Plugin::Remap::KeyboardRemapper::VIRTUAL_KEYBOARD_NAME", "dummy_virtual_keyboard")
+          expect(selector.select.map(&:name)).not_to include("dummy_virtual_keyboard")
         end
       end
 
