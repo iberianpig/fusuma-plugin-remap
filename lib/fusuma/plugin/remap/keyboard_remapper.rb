@@ -181,7 +181,7 @@ module Fusuma
 
         # @param [Array<Revdev::EventDevice>] keyboards
         def set_trap(keyboards)
-          @destroy = lambda do
+          @destroy = lambda do |status = 0|
             keyboards.each do |kbd|
               kbd.ungrab
             rescue Errno::EINVAL
@@ -195,11 +195,11 @@ module Fusuma
               # already destroyed
             end
 
-            exit 0
+            exit status
           end
 
           Signal.trap(:INT) { @destroy.call }
-          Signal.trap(:TERM) { @destroy.call }
+          Signal.trap(:TERM) { @destroy.call(1) }
         end
 
         # Emergency stop keybind for virtual keyboard
