@@ -3,6 +3,7 @@ require "msgpack"
 require "set"
 require_relative "layer_manager"
 require_relative "uinput_keyboard"
+require "fusuma/device"
 
 module Fusuma
   module Plugin

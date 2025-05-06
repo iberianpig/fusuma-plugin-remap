@@ -63,14 +63,14 @@ module Fusuma
         private
 
         def setup_remapper
-          internal_touchpad = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select.first
-          if internal_touchpad.nil?
+          source_touchpads = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select
+          if source_touchpads.empty?
             MultiLogger.error("No touchpad found: #{config_params(:touchpad_name_patterns)}")
             exit
           end
 
           MultiLogger.info("set up remapper")
-          MultiLogger.info("internal_touchpad: #{internal_touchpad.device_name}")
+          MultiLogger.info("touchpad: #{source_touchpads}")
 
           # layer_manager = Remap::LayerManager.instance
 
@@ -83,7 +83,7 @@ module Fusuma
             remapper = Remap::TouchpadRemapper.new(
               # layer_manager: layer_manager,
               fusuma_writer: fusuma_writer,
-              source_touchpad: internal_touchpad
+              source_touchpads: source_touchpads
             )
             remapper.run
           end
