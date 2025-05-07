@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "fusuma/device"
 require_relative "../remap/keyboard_remapper"
 require_relative "../remap/layer_manager"
 
