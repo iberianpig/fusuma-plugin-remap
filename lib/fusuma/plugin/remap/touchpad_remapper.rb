@@ -13,11 +13,15 @@ module Fusuma
         VIRTUAL_TOUCHPAD_NAME = "fusuma_virtual_touchpad"
 
         # @param fusuma_writer [IO]
-        # @param source_touchpad [Revdev::Device]
-        def initialize(fusuma_writer:, source_touchpad:)
-          @source_touchpad = source_touchpad # original touchpad
+        # @param source_touchpads [Revdev::Device]
+        def initialize(fusuma_writer:, source_touchpads:)
+          @source_touchpads = source_touchpads # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
-          @palm_detector ||= PalmDetection.new(source_touchpad)
+
+          # FIXME: PalmDetection should be initialized with each touchpad
+          @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|
+            palm_detectors[source_touchpad] = PalmDetection.new(source_touchpad)
+          end
 
           set_trap
         end
@@ -31,7 +35,10 @@ module Fusuma
           mt_slot = 0
           finger_state = nil
           loop do
-            IO.select([@source_touchpad.file]) # , @layer_manager.reader])
+            ios = IO.select(@source_touchpads.map(&:file)) # , @layer_manager.reader])
+            io = ios&.first&.first
+
+            touchpad = @source_touchpads.find { |t| t.file == io }
 
             ## example of input_event
             # Event: time 1698456258.380027, type 3 (EV_ABS), code 57 (ABS_MT_TRACKING_ID), value 43679
@@ -51,7 +58,7 @@ module Fusuma
             # Event: time 1698456258.382693, type 1 (EV_KEY), code 333 (BTN_TOOL_DOUBLETAP), value 1
             # Event: time 1698456258.382693, type 4 (EV_MSC), code 5 (MSC_TIMESTAMP), value 7100
             # Event: time 1698456258.382693, -------------- SYN_REPORT ------------
-            input_event = @source_touchpad.read_input_event
+            input_event = touchpad.read_input_event
 
             touch_state[mt_slot] ||= {MT_TRACKING_ID: nil, X: nil, Y: nil, valid_touch_point: false}
             syn_report = nil
@@ -118,11 +125,12 @@ module Fusuma
             # Remember the most recent valid touch position and exclude it if it is close to that position
             # For example, when dragging, it is possible to touch around the edge of the touchpad again after reaching the edge of the touchpad, so in that case, you do not want to execute palm detection
             if touch_state[mt_slot][:valid_touch_point] != true
-              touch_state[mt_slot][:valid_touch_point] = @palm_detector.palm?(touch_state[mt_slot])
+              touch_state[mt_slot][:valid_touch_point] = @palm_detectors[touchpad].palm?(touch_state[mt_slot])
             end
 
             if syn_report
               # TODO: define format as fusuma_input
+              # TODO: Add data to identify multiple touchpads
               data = {finger: finger_state, touch_state: touch_state}
               @fusuma_writer.write(data.to_msgpack)
             end
@@ -141,7 +149,8 @@ module Fusuma
 
         def create_virtual_touchpad
           MultiLogger.info "Create virtual touchpad: #{VIRTUAL_TOUCHPAD_NAME}"
-          uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpad)
+          # NOTE: Use uinput to create a virtual touchpad that copies from first touchpad
+          uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpads.first)
         end
 
         def set_trap
