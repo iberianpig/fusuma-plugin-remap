@@ -85,7 +85,8 @@ module Fusuma
               when Revdev::ABS_MT_TOOL_TYPE
                 # ignore
               else
-                raise "unhandled event"
+                # raise "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
+                MultiLogger.warn "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
               end
             when Revdev::EV_KEY
               case input_event.code
@@ -115,10 +116,10 @@ module Fusuma
               when Revdev::SYN_DROPPED
                 MultiLogger.error "Dropped: #{input_event.value}"
               else
-                raise "unhandled event", "#{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
+                raise "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
               end
             else
-              raise "unhandled event", "#{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
+              raise "unhandled event:#{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
             end
 
             # TODO:
