@@ -1,7 +1,8 @@
 plugin:
   inputs:
     remap_keyboard_input:
-      keyboard_name_patterns: ["keyboard", "Keyboard", "KEYBOARD"]
+      keyboard_name_patterns: 
+        - keyboard|Keyboard|KEYBOARD
       emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL
   buffers:
     keypress_buffer:

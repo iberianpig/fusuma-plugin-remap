@@ -1,4 +1,6 @@
 plugin:
   inputs:
     remap_touchpad_input:
-      touchpad_name_patterns: ["touchpad", "Touchpad", "TOUCHPAD"]
+      touchpad_name_patterns: 
+        - touchpad|Touchpad|TOUCHPAD
+        - trackpad|Trackpad|TRACKPAD
