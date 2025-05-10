@@ -78,14 +78,15 @@ module Fusuma
                 touch_state[mt_slot][:X] = input_event.value
               when Revdev::ABS_MT_POSITION_Y
                 touch_state[mt_slot][:Y] = input_event.value
-              when Revdev::ABS_X, Revdev::ABS_Y
-                # ignore
-              when Revdev::ABS_MT_PRESSURE
-                # ignore
-              when Revdev::ABS_MT_TOOL_TYPE
+              when Revdev::ABS_X, Revdev::ABS_Y,
+                Revdev::ABS_MT_PRESSURE,
+                Revdev::ABS_MT_TOOL_TYPE,
+                Revdev::ABS_MT_TOUCH_MAJOR,
+                Revdev::ABS_MT_TOUCH_MINOR,
+                Revdev::ABS_MT_ORIENTATION,
+                Revdev::ABS_PRESSURE
                 # ignore
               else
-                # raise "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
                 MultiLogger.warn "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
               end
             when Revdev::EV_KEY
