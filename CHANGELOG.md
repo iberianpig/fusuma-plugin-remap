@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.10.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.10.0) (2025-05-11)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.9.0...v0.10.0)
+
+**Merged pull requests:**
+
+- feat: support multiple touchpads concurrently [\#7](https://github.com/iberianpig/fusuma-plugin-remap/pull/7) ([iberianpig](https://github.com/iberianpig))
+
 ## [v0.9.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.9.0) (2025-02-19)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.8.0...v0.9.0)
