@@ -86,6 +86,76 @@ plugin:
 This configuration allows you to specify which keys will trigger the emergency stop functionality.
 It is important to verify this keybind to ensure a swift response during unexpected situations.
 
+### Input Device Detection
+
+#### Keyboard
+
+configure `plugin.inputs.remap_keyboard_input` in `~/.config/fusuma/config.yml` to specify which physical keyboard to remap.
+
+If your external or built-in keyboard is not detected, run `libinput list-devices` to find its name and add a matching pattern under `keyboard_name_patterns`.
+
+```yaml
+plugin:
+  inputs:
+    remap_keyboard_input:
+      # By default, Fusuma will detect physical keyboards matching these patterns.
+      # You can specify multiple regular‐expression strings in an array.
+      keyboard_name_patterns:
+        # Default value
+        - keyboard|Keyboard|KEYBOARD
+
+      # Emergency stop key combination.
+      # Specify exactly two keys joined by '+'.
+      emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL
+```
+
+You can customize `keyboard_name_patterns` like this:
+
+```yaml
+plugin:
+  inputs:
+    remap_keyboard_input:
+      keyboard_name_patterns:
+        - xremap                     # Virtual keyboard created by another remapper
+        - PFU Limited HHKB-Hybrid    # External keyboard
+        - keyboard|Keyboard|KEYBOARD # Default pattern
+```
+
+If your keyboard isn’t detected, run:
+
+```sh
+libinput list-devices
+```
+
+and add a suitable name pattern.
+
+#### Touchpad
+
+To specify touchpad name, configure `plugin.inputs.remap_touchpad_input`:
+
+```yaml
+plugin:
+  inputs:
+    remap_touchpad_input:
+      # By default, Fusuma will detect physical touchpads matching these patterns.
+      touchpad_name_patterns:
+        # Default values
+        - touchpad|Touchpad|TOUCHPAD
+        - trackpad|Trackpad|TRACKPAD
+```
+
+You can customize `touchpad_name_patterns` like this:
+
+```yaml
+plugin:
+  inputs:
+    remap_touchpad_input:
+      touchpad_name_patterns:
+        - Apple Inc. Magic Trackpad   # External Trackpad
+        - your touchpad device name   # Any other touchpad
+        - Touchpad|Trackpad           # match to "Touchpad" or "Trackpad"
+```
+
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at https://github.com/iberianpig/fusuma-plugin-remap. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.

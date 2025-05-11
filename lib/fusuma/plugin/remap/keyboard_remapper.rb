@@ -310,7 +310,7 @@ module Fusuma
 
         # Devices to detect key presses and releases
         class KeyboardSelector
-          def initialize(names = ["keyboard", "Keyboard", "KEYBOARD"])
+          def initialize(names)
             @names = names
           end
 
