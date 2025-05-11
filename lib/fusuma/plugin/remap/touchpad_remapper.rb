@@ -120,7 +120,7 @@ module Fusuma
                 raise "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
               end
             else
-              raise "unhandled event:#{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
+              raise "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
             end
 
             # TODO:
