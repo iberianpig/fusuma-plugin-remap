@@ -18,7 +18,6 @@ module Fusuma
           @source_touchpads = source_touchpads # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
 
-          # FIXME: PalmDetection should be initialized with each touchpad
           @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|
             palm_detectors[source_touchpad] = PalmDetection.new(source_touchpad)
           end

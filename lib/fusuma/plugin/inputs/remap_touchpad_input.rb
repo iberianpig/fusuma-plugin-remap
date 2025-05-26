@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "../remap/touchpad_remapper"
-# require_relative "../remap/layer_manager"
 
 module Fusuma
   module Plugin
