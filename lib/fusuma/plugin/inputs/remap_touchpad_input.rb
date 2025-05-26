@@ -35,28 +35,9 @@ module Fusuma
 
           gesture = "touch"
           finger = data["finger"]
+          status = data["status"]
 
-          # @touch_state ||= {}
-          # @mt_slot ||= 0
-          # @touch_state[@mt_slot] ||= {
-          #   MT_TRACKING_ID: nil,
-          #   X: nil,
-          #   Y: nil,
-          #   valid_touch_point: false
-          # }
-          #
-          # determine whether any MT slot is currently touching
-          active = data["touch_state"].any? { |_, v| v["valid_touch_point"] }
-
-          @status =
-            if active
-              # if begin/update, continue as update
-              ["begin", "update"].include?(@status) ? "update" : "begin"
-            else
-              "end"
-            end
-
-          Events::Records::GestureRecord.new(gesture: gesture, status: @status, finger: finger, delta: nil)
+          Events::Records::GestureRecord.new(gesture: gesture, status: status, finger: finger, delta: nil)
         rescue EOFError => e
           MultiLogger.error "#{self.class.name}: #{e}"
           MultiLogger.error "Shutdown fusuma process..."

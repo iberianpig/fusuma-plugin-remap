@@ -34,6 +34,9 @@ module Fusuma
           touch_state = {}
           mt_slot = 0
           finger_state = nil
+
+          prev_valid_touch = false
+          prev_status = nil
           loop do
             ios = IO.select(@source_touchpads.map(&:file)) # , @layer_manager.reader])
             io = ios&.first&.first
@@ -131,10 +134,29 @@ module Fusuma
             end
 
             if syn_report
+              # Whether any slot is valid (touching)
+              valid_touch = touch_state.any? { |_, st| st[:valid_touch_point] }
+
+              status =
+                if valid_touch
+                  prev_valid_touch ? "update" : "begin"
+                else
+                  prev_valid_touch ? "end" : "cancelled"
+                end
+
+              if status == prev_status
+                next
+              end
+
               # TODO: define format as fusuma_input
               # TODO: Add data to identify multiple touchpads
-              data = {finger: finger_state, touch_state: touch_state}
+              data = {
+                finger: finger_state,
+                status: status
+              }
               @fusuma_writer.write(data.to_msgpack)
+              prev_status = status
+              prev_valid_touch = valid_touch
             end
           end
         rescue => e
