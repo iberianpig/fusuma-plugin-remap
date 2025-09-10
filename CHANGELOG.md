@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.11.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.11.0) (2025-05-26)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.10.0...v0.11.0)
+
 ## [v0.10.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.10.0) (2025-05-11)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.9.0...v0.10.0)
