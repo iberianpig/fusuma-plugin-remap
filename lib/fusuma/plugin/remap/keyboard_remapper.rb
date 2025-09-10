@@ -257,11 +257,13 @@ module Fusuma
         # @example
         #  find_key_from_code(30) # => "A"
         #  find_key_from_code(48) # => "B"
+        #  find_key_from_code(272) # => "BTN_LEFT"
         # @param [Integer] code
         # @return [String]
+        # @return [nil] when key is not found
         def find_key_from_code(code)
           # { 30 => :A, 48 => :B, ... }
-          @keys_per_code ||= Revdev.constants.select { |c| c.start_with? "KEY_" }.map { |c| [Revdev.const_get(c), c.to_s.delete_prefix("KEY_")] }.to_h
+          @keys_per_code ||= Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }.map { |c| [Revdev.const_get(c), c.to_s.delete_prefix("KEY_")] }.to_h
           @keys_per_code[code]
         end
 
