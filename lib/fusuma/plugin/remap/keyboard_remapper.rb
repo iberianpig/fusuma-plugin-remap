@@ -13,6 +13,14 @@ module Fusuma
 
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
 
+        # Key conversion tables for better performance and readability
+        KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
+          .map { |c| [Revdev.const_get(c), c.to_s.delete_prefix("KEY_")] }
+          .to_h.freeze
+        CODEMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
+          .map { |c| [c, Revdev.const_get(c)] }
+          .to_h.freeze
+
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
         # @param fusuma_writer [IO]
         # @param config [Hash]
@@ -53,7 +61,7 @@ module Fusuma
             end
 
             input_event = @source_keyboards.find { |kbd| kbd.file == io }.read_input_event
-            input_key = find_key_from_code(input_event.code)
+            input_key = code_to_key(input_event.code)
 
             if input_event.type == EV_KEY
               @emergency_stop.call(old_ie, input_event)
@@ -61,7 +69,13 @@ module Fusuma
               old_ie = input_event
               if input_event.value != 2 # repeat
                 data = {key: input_key, status: input_event.value, layer: layer}
-                @fusuma_writer.write(data.to_msgpack)
+                begin
+                  @fusuma_writer.write(data.to_msgpack)
+                rescue IOError => e
+                  MultiLogger.error("Failed to write to fusuma_writer: #{e.message}")
+                  @destroy&.call(1)
+                  return
+                end
               end
             end
 
@@ -71,7 +85,14 @@ module Fusuma
               next
             end
 
-            remapped_event = InputEvent.new(nil, input_event.type, find_code_from_key(remapped), input_event.value)
+            remapped_code = key_to_code(remapped)
+            if remapped_code.nil?
+              MultiLogger.warn("Invalid remapped key: #{remapped}, skipping...")
+              uinput_keyboard.write_input_event(input_event)
+              next
+            end
+
+            remapped_event = InputEvent.new(nil, input_event.type, remapped_code, input_event.value)
 
             # Workaround to solve the problem that the remapped key remains pressed
             # when the key pressed before remapping is released after remapping
@@ -203,28 +224,30 @@ module Fusuma
           Signal.trap(:TERM) { @destroy.call(1) }
         end
 
+        DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
+
         # Emergency stop keybind for virtual keyboard
         def set_emergency_ungrab_keys(keybind_string)
           keybinds = keybind_string&.split("+")
           # TODO: Extract to a configuration file or make it optional
           #       it should stop other remappers
           if keybinds&.size != 2
-            MultiLogger.error "Invalid emergency ungrab keybinds: #{keybinds}"
-            MultiLogger.error "Please set two keys separated by '+'"
-            MultiLogger.error <<~YAML
+            MultiLogger.warn "Invalid emergency ungrab keybinds: #{keybinds}, fallback to #{DEFAULT_EMERGENCY_KEYBIND}"
+            MultiLogger.warn "Please set two keys separated by '+'"
+            MultiLogger.warn <<~YAML
               plugin:
                 inputs:
                   remap_keyboard_input:
                     emergency_ungrab_keys: RIGHTCTRL+LEFTCTRL
             YAML
 
-            exit 1
+            keybinds = DEFAULT_EMERGENCY_KEYBIND.split("+")
           end
 
           MultiLogger.info "Emergency ungrab keybind: #{keybinds[0]}+#{keybinds[1]}"
 
-          first_keycode = find_code_from_key(keybinds[0])
-          second_keycode = find_code_from_key(keybinds[1])
+          first_keycode = key_to_code(keybinds[0])
+          second_keycode = key_to_code(keybinds[1])
 
           @emergency_stop = lambda do |prev, current|
             if (prev&.code == first_keycode && prev.value != 0) && (current.code == second_keycode && current.value != 0)
@@ -246,50 +269,45 @@ module Fusuma
         # @param [Integer] code
         # @return [Integer, nil]
         def find_remapped_code(mapping, code)
-          key = find_key_from_code(code) # key = "A"
+          key = code_to_key(code) # key = "A"
           remapped_key = mapping.fetch(key.to_sym, nil) # remapped_key = "b"
           return code unless remapped_key # return original code if key is not found
 
-          find_code_from_key(remapped_key) # remapped_code = 48
+          key_to_code(remapped_key) # remapped_code = 48
         end
 
         # Find key name from key code
         # @example
-        #  find_key_from_code(30) # => "A"
-        #  find_key_from_code(48) # => "B"
-        #  find_key_from_code(272) # => "BTN_LEFT"
+        #  code_to_key(30) # => "A"
+        #  code_to_key(48) # => "B"
+        #  code_to_key(272) # => "BTN_LEFT"
         # @param [Integer] code
         # @return [String]
         # @return [nil] when key is not found
-        def find_key_from_code(code)
-          # { 30 => :A, 48 => :B, ... }
-          @keys_per_code ||= Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }.map { |c| [Revdev.const_get(c), c.to_s.delete_prefix("KEY_")] }.to_h
-          @keys_per_code[code]
+        def code_to_key(code)
+          KEYMAP[code]
         end
 
         # Find key code from key name (e.g. "A", "B", "BTN_LEFT")
         # If key name is not found, return nil
         # @example
-        #  find_code_from_key("A") # => 30
-        #  find_code_from_key("B") # => 48
-        #  find_code_from_key("BTN_LEFT") # => 272
-        #  find_code_from_key("NOT_FOUND") # => nil
+        #  key_to_code("A") # => 30
+        #  key_to_code("B") # => 48
+        #  key_to_code("BTN_LEFT") # => 272
+        #  key_to_code("NOT_FOUND") # => nil
         # @param [String] key
         # @return [Integer] when key is available
         # @return [nil] when key is not available
-        def find_code_from_key(key)
-          # { KEY_A => 30, KEY_B => 48, ... }
-          @codes_per_key ||= Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }.map { |c| [c, Revdev.const_get(c)] }.to_h
-
+        def key_to_code(key)
           case key
           when String
             if key.start_with?("BTN_")
-              @codes_per_key[key.upcase.to_sym]
+              CODEMAP[key.upcase.to_sym]
             else
-              @codes_per_key["KEY_#{key}".upcase.to_sym]
+              CODEMAP["KEY_#{key}".upcase.to_sym]
             end
           when Integer
-            @codes_per_key["KEY_#{key}".upcase.to_sym]
+            CODEMAP["KEY_#{key}".upcase.to_sym]
           end
         end
 
@@ -305,7 +323,12 @@ module Fusuma
               break true
             else
               # wait until all keys are released
-              device.read_input_event
+              begin
+                device.read_input_event
+              rescue Errno::ENODEV => e
+                MultiLogger.warn("Device removed while waiting to release keys: #{e.message}")
+                return false
+              end
             end
           end
         end
