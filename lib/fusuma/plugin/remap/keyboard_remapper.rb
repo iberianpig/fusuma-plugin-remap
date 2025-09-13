@@ -80,14 +80,25 @@ module Fusuma
             end
 
             remapped = current_mapping.fetch(input_key.to_sym, nil)
-            if remapped.nil?
+            case remapped
+            when String, Symbol
+              # Remapped to another key
+            when Hash
+              # Skip explicitly if it contains keys for Executor
+              # eg) {:SENDKEY=>"LEFTCTRL+BTN_LEFT", :CLEARMODIFIERS=>true}
+              next
+            when nil
+              # Not remapped, use original key
               uinput_keyboard.write_input_event(input_event)
+              next
+            else
+              MultiLogger.warn("Invalid remapped key type: #{remapped.class}, input key: #{input_key}")
               next
             end
 
             remapped_code = key_to_code(remapped)
             if remapped_code.nil?
-              MultiLogger.warn("Invalid remapped key: #{remapped}, skipping...")
+              MultiLogger.warn("Invalid remapped key: #{remapped}, input key: #{input_key}")
               uinput_keyboard.write_input_event(input_event)
               next
             end
