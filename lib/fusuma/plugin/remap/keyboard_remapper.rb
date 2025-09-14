@@ -12,6 +12,7 @@ module Fusuma
         include Revdev
 
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
+        DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -82,34 +83,37 @@ module Fusuma
             remapped = current_mapping.fetch(input_key.to_sym, nil)
             case remapped
             when String, Symbol
-              # Remapped to another key
+              # Remapped to another key - continue processing below
             when Hash
-              # Skip explicitly if it contains keys for Executor
-              # eg) {:SENDKEY=>"LEFTCTRL+BTN_LEFT", :CLEARMODIFIERS=>true}
+              # Command execution (e.g., {:SENDKEY=>"LEFTCTRL+BTN_LEFT", :CLEARMODIFIERS=>true})
+              # Skip input event processing and let Fusuma's Executor handle this
               next
             when nil
-              # Not remapped, use original key
+              # Not remapped - write original key event as-is
               uinput_keyboard.write_input_event(input_event)
               next
             else
-              MultiLogger.warn("Invalid remapped key type: #{remapped.class}, input key: #{input_key}")
+              # Invalid remapping configuration
+              MultiLogger.warn("Invalid remapped value - type: #{remapped.class}, key: #{input_key}")
               next
             end
 
             remapped_code = key_to_code(remapped)
             if remapped_code.nil?
-              MultiLogger.warn("Invalid remapped key: #{remapped}, input key: #{input_key}")
+              MultiLogger.warn("Invalid remapped value - unknown key: #{remapped}, input: #{input_key}")
               uinput_keyboard.write_input_event(input_event)
               next
             end
 
             remapped_event = InputEvent.new(nil, input_event.type, remapped_code, input_event.value)
 
-            # Workaround to solve the problem that the remapped key remains pressed
-            # when the key pressed before remapping is released after remapping
-            unless record_virtual_keyboard_event?(remapped, remapped_event.value)
-              # set original key before remapping
+            # Workaround: If a key was pressed before remapping started and is being released,
+            # use the original key code to ensure proper key release
+            if should_use_original_key?(remapped, remapped_event.value)
               remapped_event.code = input_event.code
+            else
+              # Only update virtual key state if we're using the remapped key
+              update_virtual_key_state(remapped, remapped_event.value)
             end
 
             # remap to command will be nil
@@ -151,21 +155,34 @@ module Fusuma
           @pressed_virtual_keys ||= Set.new
         end
 
-        # record virtual keyboard event
+        # Update virtual keyboard key state
         # @param [String] remapped_value remapped key name
-        # @param [Integer] event_value event value
-        # @return [Boolean] false if the key was pressed before remapping started and was released
-        # @return [Boolean] true if the key was not pressed before remapping started
-        def record_virtual_keyboard_event?(remapped_value, event_value)
+        # @param [Integer] event_value event value (0: release, 1: press, 2: repeat)
+        # @return [void]
+        def update_virtual_key_state(remapped_value, event_value)
           case event_value
-          when 0
-            pressed_virtual_keys.delete?(remapped_value)
-          when 1
-            pressed_virtual_keys.add?(remapped_value)
-            true # Always return true because the remapped key may be the same
-          else
-            # 2 is repeat
-            true
+          when 0 # key release
+            pressed_virtual_keys.delete(remapped_value)
+          when 1 # key press
+            pressed_virtual_keys.add(remapped_value)
+            # when 2 is repeat - no state change needed
+          end
+        end
+
+        # Check if we should use the original key code instead of remapped key
+        # This handles the case where a key was pressed before remapping started
+        # and is released after remapping
+        # @param [String] remapped_value remapped key name
+        # @param [Integer] event_value event value (0: release, 1: press, 2: repeat)
+        # @return [Boolean] true if we should use original key code
+        def should_use_original_key?(remapped_value, event_value)
+          case event_value
+          when 0 # key release
+            # If the key was not in our pressed set, it means it was pressed
+            # before remapping started, so we should use original key
+            !pressed_virtual_keys.include?(remapped_value)
+          when 1, 2 # key press or repeat
+            false # Always use remapped key for press/repeat events
           end
         end
 
@@ -234,8 +251,6 @@ module Fusuma
           Signal.trap(:INT) { @destroy.call }
           Signal.trap(:TERM) { @destroy.call(1) }
         end
-
-        DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
 
         # Emergency stop keybind for virtual keyboard
         def set_emergency_ungrab_keys(keybind_string)

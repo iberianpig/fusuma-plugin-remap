@@ -22,6 +22,173 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
   end
 
+  describe "key conversion methods" do
+    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
+    let(:fusuma_writer) { double("fusuma_writer") }
+    let(:config) { {} }
+    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+
+    describe "#code_to_key" do
+      it "converts key codes to key names" do
+        # KEY_A = 30, KEY_B = 48
+        expect(remapper.send(:code_to_key, 30)).to eq("A")
+        expect(remapper.send(:code_to_key, 48)).to eq("B")
+      end
+
+      it "converts BTN codes to BTN names" do
+        # BTN_LEFT = 272
+        expect(remapper.send(:code_to_key, 272)).to eq("BTN_LEFT")
+      end
+
+      it "returns nil for invalid codes" do
+        expect(remapper.send(:code_to_key, 99999)).to be_nil
+      end
+    end
+
+    describe "#key_to_code" do
+      it "converts key names to key codes" do
+        expect(remapper.send(:key_to_code, "A")).to eq(30)
+        expect(remapper.send(:key_to_code, "B")).to eq(48)
+      end
+
+      it "converts BTN names to BTN codes" do
+        expect(remapper.send(:key_to_code, "BTN_LEFT")).to eq(272)
+      end
+
+      it "handles lowercase key names" do
+        expect(remapper.send(:key_to_code, "a")).to eq(30)
+        expect(remapper.send(:key_to_code, "b")).to eq(48)
+      end
+
+      it "returns nil for invalid key names" do
+        expect(remapper.send(:key_to_code, "INVALID_KEY")).to be_nil
+      end
+    end
+  end
+
+  describe "virtual key state management" do
+    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
+    let(:fusuma_writer) { double("fusuma_writer") }
+    let(:config) { {} }
+    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+
+    describe "#update_virtual_key_state" do
+      it "adds key to pressed_virtual_keys on press event" do
+        remapper.send(:update_virtual_key_state, "A", 1) # press
+        expect(remapper.send(:pressed_virtual_keys)).to include("A")
+      end
+
+      it "removes key from pressed_virtual_keys on release event" do
+        remapper.send(:update_virtual_key_state, "A", 1) # press
+        remapper.send(:update_virtual_key_state, "A", 0) # release
+        expect(remapper.send(:pressed_virtual_keys)).not_to include("A")
+      end
+
+      it "does not change state on repeat event" do
+        remapper.send(:update_virtual_key_state, "A", 1) # press
+        initial_state = remapper.send(:pressed_virtual_keys).dup
+        remapper.send(:update_virtual_key_state, "A", 2) # repeat
+        expect(remapper.send(:pressed_virtual_keys)).to eq(initial_state)
+      end
+    end
+
+    describe "#should_use_original_key?" do
+      it "returns false for press events" do
+        expect(remapper.send(:should_use_original_key?, "A", 1)).to be false
+      end
+
+      it "returns false for repeat events" do
+        expect(remapper.send(:should_use_original_key?, "A", 2)).to be false
+      end
+
+      it "returns false for release events of pressed keys" do
+        remapper.send(:update_virtual_key_state, "A", 1) # press first
+        expect(remapper.send(:should_use_original_key?, "A", 0)).to be false
+      end
+
+      it "returns true for release events of unpressed keys" do
+        # Key was not pressed in virtual state (pressed before remapping started)
+        expect(remapper.send(:should_use_original_key?, "A", 0)).to be true
+      end
+    end
+
+    describe "#virtual_keyboard_all_key_released?" do
+      it "returns true when no keys are pressed" do
+        expect(remapper.send(:virtual_keyboard_all_key_released?)).to be true
+      end
+
+      it "returns false when keys are pressed" do
+        remapper.send(:update_virtual_key_state, "A", 1) # press
+        expect(remapper.send(:virtual_keyboard_all_key_released?)).to be false
+      end
+
+      it "returns true after all keys are released" do
+        remapper.send(:update_virtual_key_state, "A", 1) # press
+        remapper.send(:update_virtual_key_state, "B", 1) # press
+        remapper.send(:update_virtual_key_state, "A", 0) # release
+        expect(remapper.send(:virtual_keyboard_all_key_released?)).to be false
+        remapper.send(:update_virtual_key_state, "B", 0) # release
+        expect(remapper.send(:virtual_keyboard_all_key_released?)).to be true
+      end
+    end
+  end
+
+  describe "emergency keybind fallback" do
+    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
+    let(:fusuma_writer) { double("fusuma_writer") }
+    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+
+    describe "#set_emergency_ungrab_keys" do
+      context "with valid keybind (2 keys)" do
+        let(:config) { {} }
+
+        it "sets emergency keybind without warnings" do
+          expect(Fusuma::MultiLogger).not_to receive(:warn)
+          remapper.send(:set_emergency_ungrab_keys, "LEFTCTRL+RIGHTCTRL")
+        end
+      end
+
+      context "with invalid keybind (1 key)" do
+        let(:config) { {} }
+
+        it "falls back to default keybind with warning" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Invalid emergency ungrab keybinds/)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Please set two keys/)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/plugin:/)
+          expect(Fusuma::MultiLogger).to receive(:info).with(/Emergency ungrab keybind: RIGHTCTRL\+LEFTCTRL/)
+
+          remapper.send(:set_emergency_ungrab_keys, "LEFTCTRL")
+        end
+      end
+
+      context "with invalid keybind (3 keys)" do
+        let(:config) { {} }
+
+        it "falls back to default keybind with warning" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Invalid emergency ungrab keybinds/)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Please set two keys/)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/plugin:/)
+          expect(Fusuma::MultiLogger).to receive(:info).with(/Emergency ungrab keybind: RIGHTCTRL\+LEFTCTRL/)
+
+          remapper.send(:set_emergency_ungrab_keys, "LEFTCTRL+RIGHTCTRL+LEFTALT")
+        end
+      end
+
+      context "with nil keybind" do
+        let(:config) { {} }
+
+        it "falls back to default keybind with warning" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Invalid emergency ungrab keybinds/)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Please set two keys/)
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/plugin:/)
+          expect(Fusuma::MultiLogger).to receive(:info).with(/Emergency ungrab keybind: RIGHTCTRL\+LEFTCTRL/)
+
+          remapper.send(:set_emergency_ungrab_keys, nil)
+        end
+      end
+    end
+  end
+
   describe Fusuma::Plugin::Remap::KeyboardRemapper::KeyboardSelector do
     describe "#select" do
       let(:selector) { described_class.new(["dummy_valid_device"]) }
