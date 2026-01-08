@@ -194,27 +194,30 @@ module Fusuma
           touchpad_name_patterns = @config[:touchpad_name_patterns]
           internal_touchpad = TouchpadSelector.new(touchpad_name_patterns).select.first
 
-          if internal_touchpad.nil?
-            MultiLogger.error("No touchpad found: #{touchpad_name_patterns}")
-            exit
-          end
-
           MultiLogger.info "Create virtual keyboard: #{VIRTUAL_KEYBOARD_NAME}"
 
-          uinput_keyboard.create VIRTUAL_KEYBOARD_NAME,
-            Revdev::InputId.new(
-              # disable while typing is enabled when
-              # - Both the keyboard and touchpad are BUS_I8042
-              # - The touchpad and keyboard have the same vendor/product
-              # ref: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
-              #
-              {
-                bustype: Revdev::BUS_I8042,
-                vendor: internal_touchpad.device_id.vendor,
-                product: internal_touchpad.device_id.product,
-                version: internal_touchpad.device_id.version
-              }
-            )
+          if internal_touchpad.nil?
+            MultiLogger.warn("No touchpad found: #{touchpad_name_patterns}")
+            MultiLogger.warn("Disable-while-typing feature will not work without a touchpad")
+            # Create virtual keyboard without touchpad device ID
+            # disable-while-typing will not work in this case
+            uinput_keyboard.create VIRTUAL_KEYBOARD_NAME
+          else
+            uinput_keyboard.create VIRTUAL_KEYBOARD_NAME,
+              Revdev::InputId.new(
+                # disable while typing is enabled when
+                # - Both the keyboard and touchpad are BUS_I8042
+                # - The touchpad and keyboard have the same vendor/product
+                # ref: (https://wayland.freedesktop.org/libinput/doc/latest/palm-detection.html#disable-while-typing)
+                #
+                {
+                  bustype: Revdev::BUS_I8042,
+                  vendor: internal_touchpad.device_id.vendor,
+                  product: internal_touchpad.device_id.product,
+                  version: internal_touchpad.device_id.version
+                }
+              )
+          end
         end
 
         def grab_keyboards(keyboards)

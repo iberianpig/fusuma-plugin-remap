@@ -228,4 +228,106 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       end
     end
   end
+
+  describe Fusuma::Plugin::Remap::KeyboardRemapper::TouchpadSelector do
+    describe "#select" do
+      context "with touchpad found" do
+        let(:selector) { described_class.new(["Touchpad"]) }
+        let(:event_device) { double(Revdev::EventDevice, name: "Touchpad") }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "Touchpad", id: "event0", available: true)
+          ])
+          allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
+        end
+
+        it "returns array of EventDevice" do
+          expect(selector.select).to be_a_kind_of(Array)
+          expect(selector.select.first).to eq(event_device)
+        end
+      end
+
+      context "without touchpad (no device found)" do
+        let(:selector) { described_class.new(["Touchpad"]) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([])
+          allow(Fusuma::Device).to receive(:available).and_return([])
+        end
+
+        it "returns empty array without exit" do
+          expect(selector.select).to eq([])
+        end
+      end
+
+      context "with nil names (uses Device.available)" do
+        let(:selector) { described_class.new(nil) }
+
+        before do
+          allow(Fusuma::Device).to receive(:available).and_return([])
+        end
+
+        it "returns empty array when no touchpad available" do
+          expect(selector.select).to eq([])
+        end
+      end
+    end
+  end
+
+  describe "#create_virtual_keyboard" do
+    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
+    let(:fusuma_writer) { double("fusuma_writer") }
+    let(:uinput_keyboard) { instance_double("Fusuma::Plugin::Remap::UinputKeyboard") }
+
+    context "with touchpad found" do
+      let(:config) { {touchpad_name_patterns: ["Touchpad"]} }
+      let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+      let(:device_id) { double("device_id", vendor: 0x1234, product: 0x5678, version: 1) }
+      let(:event_device) { double(Revdev::EventDevice, device_id: device_id) }
+
+      before do
+        allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+        allow(Fusuma::Device).to receive(:all).and_return([
+          Fusuma::Device.new(name: "Touchpad", id: "event0", available: true)
+        ])
+        allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
+      end
+
+      it "creates virtual keyboard with touchpad device ID" do
+        expect(uinput_keyboard).to receive(:create).with(
+          described_class::VIRTUAL_KEYBOARD_NAME,
+          instance_of(Revdev::InputId)
+        )
+        remapper.send(:create_virtual_keyboard)
+      end
+    end
+
+    context "without touchpad" do
+      let(:config) { {touchpad_name_patterns: ["Touchpad"]} }
+      let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+
+      before do
+        allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+        allow(Fusuma::Device).to receive(:all).and_return([])
+        allow(Fusuma::Device).to receive(:available).and_return([])
+      end
+
+      it "creates virtual keyboard without device ID and logs warning" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/Create virtual keyboard/)
+        expect(Fusuma::MultiLogger).to receive(:warn).with(/No touchpad found/)
+        expect(Fusuma::MultiLogger).to receive(:warn).with(/Disable-while-typing/)
+        expect(uinput_keyboard).to receive(:create).with(described_class::VIRTUAL_KEYBOARD_NAME)
+        remapper.send(:create_virtual_keyboard)
+      end
+
+      it "does not exit when touchpad is not found" do
+        allow(Fusuma::MultiLogger).to receive(:info)
+        allow(Fusuma::MultiLogger).to receive(:warn)
+        allow(uinput_keyboard).to receive(:create)
+
+        expect { remapper.send(:create_virtual_keyboard) }.not_to raise_error
+      end
+    end
+  end
 end
