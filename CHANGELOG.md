@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.12.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.12.0) (2026-01-09)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.11.2...v0.12.0)
+
+**Fixed bugs:**
+
+- feat: allow keyboard remapper to work without touchpad [\#8](https://github.com/iberianpig/fusuma-plugin-remap/pull/8) ([iberianpig](https://github.com/iberianpig))
+
+## [v0.11.2](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.11.2) (2025-09-14)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.11.1...v0.11.2)
+
 ## [v0.11.1](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.11.1) (2025-09-10)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.11.0...v0.11.1)
