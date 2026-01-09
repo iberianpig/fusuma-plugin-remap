@@ -50,20 +50,24 @@ module Fusuma
 
           # physical touchpad input event
           @fusuma_reader, fusuma_writer = IO.pipe
-
-          # TouchpadSelector waits until touchpad is found (like KeyboardSelector)
-          source_touchpads = TouchpadSelector.new(config_params(:touchpad_name_patterns)).select
-
-          MultiLogger.info("set up remapper")
-          MultiLogger.info("touchpad: #{source_touchpads}")
+          touchpad_name_patterns = config_params(:touchpad_name_patterns)
 
           fork do
             # layer_manager.writer.close
             @fusuma_reader.close
+
+            # TouchpadSelector waits until touchpad is found (like KeyboardSelector)
+            # NOTE: This must be inside fork to avoid blocking the main Fusuma process
+            source_touchpads = TouchpadSelector.new(touchpad_name_patterns).select
+
+            MultiLogger.info("set up remapper")
+            MultiLogger.info("touchpad: #{source_touchpads}")
+
             remapper = Remap::TouchpadRemapper.new(
               # layer_manager: layer_manager,
               fusuma_writer: fusuma_writer,
-              source_touchpads: source_touchpads
+              source_touchpads: source_touchpads,
+              touchpad_name_patterns: touchpad_name_patterns
             )
             remapper.run
           end

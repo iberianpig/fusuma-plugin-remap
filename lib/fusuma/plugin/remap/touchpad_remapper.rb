@@ -3,6 +3,7 @@ require "msgpack"
 require "set"
 
 require_relative "uinput_touchpad"
+require "fusuma/device"
 
 module Fusuma
   module Plugin
@@ -14,9 +15,11 @@ module Fusuma
 
         # @param fusuma_writer [IO]
         # @param source_touchpads [Revdev::Device]
-        def initialize(fusuma_writer:, source_touchpads:)
+        # @param touchpad_name_patterns [Array, String, nil] patterns for touchpad device names (for reconnection)
+        def initialize(fusuma_writer:, source_touchpads:, touchpad_name_patterns: nil)
           @source_touchpads = source_touchpads # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
+          @touchpad_name_patterns = touchpad_name_patterns # for reconnection
 
           @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|
             palm_detectors[source_touchpad] = PalmDetection.new(source_touchpad)
@@ -157,7 +160,19 @@ module Fusuma
               prev_status = status
               prev_valid_touch = valid_touch
             end
+          rescue Errno::ENODEV => e
+            MultiLogger.error "Touchpad device is removed: #{e.message}"
+            MultiLogger.info "Waiting for touchpad to reconnect..."
+            reload_touchpads
+            touch_state = {}
+            mt_slot = 0
+            finger_state = nil
+            prev_valid_touch = false
+            prev_status = nil
+            retry
           end
+        rescue IOError => e
+          MultiLogger.error "Touchpad IO error: #{e.message}"
         rescue => e
           MultiLogger.error "An error occurred: #{e.message}"
         ensure
@@ -174,6 +189,46 @@ module Fusuma
           MultiLogger.info "Create virtual touchpad: #{VIRTUAL_TOUCHPAD_NAME}"
           # NOTE: Use uinput to create a virtual touchpad that copies from first touchpad
           uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpads.first)
+        end
+
+        # Reload touchpads after device disconnection
+        # This method waits until a touchpad is reconnected
+        def reload_touchpads
+          # Destroy virtual touchpad
+          begin
+            uinput.destroy
+          rescue IOError
+            # already destroyed
+          end
+          @uinput = nil
+
+          # Wait and detect touchpad (polling loop)
+          loop do
+            Fusuma::Device.reset
+            devices = if @touchpad_name_patterns
+              Fusuma::Device.all.select { |d| Array(@touchpad_name_patterns).any? { |name| d.name =~ /#{name}/ } }
+            else
+              Fusuma::Device.available
+            end
+
+            if devices.empty?
+              sleep 3
+              next
+            end
+
+            @source_touchpads = devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
+            break
+          end
+
+          # Reinitialize palm detectors
+          @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|
+            palm_detectors[source_touchpad] = PalmDetection.new(source_touchpad)
+          end
+
+          # Recreate virtual touchpad
+          create_virtual_touchpad
+
+          MultiLogger.info "Touchpad reconnected: #{@source_touchpads}"
         end
 
         def set_trap
