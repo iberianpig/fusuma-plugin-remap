@@ -3,6 +3,7 @@ require "msgpack"
 require "set"
 require_relative "layer_manager"
 require_relative "uinput_keyboard"
+require_relative "device_selector"
 require "fusuma/device"
 
 module Fusuma
@@ -192,7 +193,11 @@ module Fusuma
 
         def create_virtual_keyboard
           touchpad_name_patterns = @config[:touchpad_name_patterns]
-          internal_touchpad = TouchpadSelector.new(touchpad_name_patterns).select.first
+          # Use DeviceSelector without wait - keyboard remap should work even without touchpad
+          internal_touchpad = DeviceSelector.new(
+            name_patterns: touchpad_name_patterns,
+            device_type: :touchpad
+          ).select(wait: false).first
 
           MultiLogger.info "Create virtual keyboard: #{VIRTUAL_KEYBOARD_NAME}"
 
@@ -396,24 +401,6 @@ module Fusuma
 
           def wait_for_device
             sleep 3
-          end
-        end
-
-        class TouchpadSelector
-          def initialize(names = nil)
-            @names = names
-          end
-
-          # @return [Array<Revdev::EventDevice>]
-          def select
-            devices = if @names
-              Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
-            else
-              # available returns only touchpad devices
-              Fusuma::Device.available
-            end
-
-            devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
           end
         end
       end

@@ -3,6 +3,7 @@ require "msgpack"
 require "set"
 
 require_relative "uinput_touchpad"
+require_relative "device_selector"
 require "fusuma/device"
 
 module Fusuma
@@ -202,23 +203,11 @@ module Fusuma
           end
           @uinput = nil
 
-          # Wait and detect touchpad (polling loop)
-          loop do
-            Fusuma::Device.reset
-            devices = if @touchpad_name_patterns
-              Fusuma::Device.all.select { |d| Array(@touchpad_name_patterns).any? { |name| d.name =~ /#{name}/ } }
-            else
-              Fusuma::Device.available
-            end
-
-            if devices.empty?
-              sleep 3
-              next
-            end
-
-            @source_touchpads = devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
-            break
-          end
+          # Wait and detect touchpad using DeviceSelector
+          @source_touchpads = DeviceSelector.new(
+            name_patterns: @touchpad_name_patterns,
+            device_type: :touchpad
+          ).select(wait: true)
 
           # Reinitialize palm detectors
           @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|

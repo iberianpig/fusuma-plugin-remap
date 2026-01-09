@@ -1,6 +1,7 @@
 require "spec_helper"
 
 require "fusuma/plugin/remap/keyboard_remapper"
+require "fusuma/plugin/remap/device_selector"
 require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
@@ -229,52 +230,6 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
   end
 
-  describe Fusuma::Plugin::Remap::KeyboardRemapper::TouchpadSelector do
-    describe "#select" do
-      context "with touchpad found" do
-        let(:selector) { described_class.new(["Touchpad"]) }
-        let(:event_device) { double(Revdev::EventDevice, name: "Touchpad") }
-
-        before do
-          allow(Fusuma::Device).to receive(:all).and_return([
-            Fusuma::Device.new(name: "Touchpad", id: "event0", available: true)
-          ])
-          allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
-        end
-
-        it "returns array of EventDevice" do
-          expect(selector.select).to be_a_kind_of(Array)
-          expect(selector.select.first).to eq(event_device)
-        end
-      end
-
-      context "without touchpad (no device found)" do
-        let(:selector) { described_class.new(["Touchpad"]) }
-
-        before do
-          allow(Fusuma::Device).to receive(:all).and_return([])
-          allow(Fusuma::Device).to receive(:available).and_return([])
-        end
-
-        it "returns empty array without exit" do
-          expect(selector.select).to eq([])
-        end
-      end
-
-      context "with nil names (uses Device.available)" do
-        let(:selector) { described_class.new(nil) }
-
-        before do
-          allow(Fusuma::Device).to receive(:available).and_return([])
-        end
-
-        it "returns empty array when no touchpad available" do
-          expect(selector.select).to eq([])
-        end
-      end
-    end
-  end
-
   describe "#create_virtual_keyboard" do
     let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
     let(:fusuma_writer) { double("fusuma_writer") }
@@ -288,6 +243,7 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
       before do
         allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+        allow(Fusuma::Device).to receive(:reset)
         allow(Fusuma::Device).to receive(:all).and_return([
           Fusuma::Device.new(name: "Touchpad", id: "event0", available: true)
         ])
@@ -309,6 +265,7 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
       before do
         allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+        allow(Fusuma::Device).to receive(:reset)
         allow(Fusuma::Device).to receive(:all).and_return([])
         allow(Fusuma::Device).to receive(:available).and_return([])
       end

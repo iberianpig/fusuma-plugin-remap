@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "../remap/touchpad_remapper"
+require_relative "../remap/device_selector"
 
 module Fusuma
   module Plugin
@@ -56,9 +57,12 @@ module Fusuma
             # layer_manager.writer.close
             @fusuma_reader.close
 
-            # TouchpadSelector waits until touchpad is found (like KeyboardSelector)
+            # DeviceSelector waits until touchpad is found (like KeyboardSelector)
             # NOTE: This must be inside fork to avoid blocking the main Fusuma process
-            source_touchpads = TouchpadSelector.new(touchpad_name_patterns).select
+            source_touchpads = Remap::DeviceSelector.new(
+              name_patterns: touchpad_name_patterns,
+              device_type: :touchpad
+            ).select(wait: true)
 
             MultiLogger.info("set up remapper")
             MultiLogger.info("touchpad: #{source_touchpads}")
@@ -73,44 +77,6 @@ module Fusuma
           end
           # layer_manager.reader.close
           fusuma_writer.close
-        end
-
-        class TouchpadSelector
-          def initialize(names = nil)
-            @names = names
-          end
-
-          # Select devices that match the name
-          # If no device is found, it will wait for 3 seconds and try again
-          # @return [Array<Revdev::EventDevice>]
-          def select
-            displayed_no_touchpad = false
-            loop do
-              Fusuma::Device.reset # reset cache to get the latest device information
-              devices = if @names
-                Fusuma::Device.all.select { |d| Array(@names).any? { |name| d.name =~ /#{name}/ } }
-              else
-                # available returns only touchpad devices
-                Fusuma::Device.available
-              end
-
-              if devices.empty?
-                unless displayed_no_touchpad
-                  MultiLogger.warn "No touchpad found: #{@names || "(default patterns)"}"
-                  MultiLogger.warn "Waiting for touchpad to be connected..."
-                  displayed_no_touchpad = true
-                end
-                wait_for_device
-                next
-              end
-
-              return devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
-            end
-          end
-
-          def wait_for_device
-            sleep 3
-          end
         end
       end
     end
