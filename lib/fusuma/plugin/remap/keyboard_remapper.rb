@@ -4,6 +4,7 @@ require "set"
 require_relative "layer_manager"
 require_relative "uinput_keyboard"
 require_relative "device_selector"
+require_relative "modifier_state"
 require "fusuma/device"
 
 module Fusuma
@@ -36,6 +37,9 @@ module Fusuma
           create_virtual_keyboard
           @source_keyboards = reload_keyboards
 
+          # Manage modifier key states
+          @modifier_state = ModifierState.new
+
           old_ie = nil
           layer = nil
           next_mapping = nil
@@ -56,9 +60,7 @@ module Fusuma
             end
 
             if next_mapping && virtual_keyboard_all_key_released?
-              if current_mapping != next_mapping
-                current_mapping = next_mapping
-              end
+              current_mapping = next_mapping if current_mapping != next_mapping
               next_mapping = nil
             end
 
@@ -69,6 +71,10 @@ module Fusuma
               @emergency_stop.call(old_ie, input_event)
 
               old_ie = input_event
+
+              # Update modifier key state
+              @modifier_state.update(input_key, input_event.value)
+
               if input_event.value != 2 # repeat
                 data = {key: input_key, status: input_event.value, layer: layer}
                 begin
@@ -81,10 +87,21 @@ module Fusuma
               end
             end
 
-            remapped = current_mapping.fetch(input_key.to_sym, nil)
+            # Search for remapping with modifier keys
+            # 1. If modifier keys are pressed, first search with modifier+key (e.g., "LEFTCTRL+A")
+            # 2. If not found, search with simple key (e.g., "A
+            # 3. If matched with modifier, temporarily release original modifiers before sending remapped key
+            remapped, is_modifier_remap = find_remapping(current_mapping, input_key)
             case remapped
             when String, Symbol
               # Remapped to another key - continue processing below
+            when Array
+              # === Output sequence ===
+              # Send each element of the array in order
+              # e.g., LEFTCTRL+U: [LEFTSHIFT+HOME, DELETE]
+              #      → Send Shift+Home → Send Delete
+              # Like modifier remap, temporarily release original modifiers before sending
+              next
             when Hash
               # Command execution (e.g., {:SENDKEY=>"LEFTCTRL+BTN_LEFT", :CLEARMODIFIERS=>true})
               # Skip input event processing and let Fusuma's Executor handle this
@@ -96,6 +113,13 @@ module Fusuma
             else
               # Invalid remapping configuration
               MultiLogger.warn("Invalid remapped value - type: #{remapped.class}, key: #{input_key}")
+              next
+            end
+
+            # For modifier remaps, handle specially:
+            # Release currently pressed modifiers → Send remapped key → Re-press modifiers
+            if is_modifier_remap && input_event.value == 1
+              execute_modifier_remap(remapped, input_event)
               next
             end
 
@@ -284,7 +308,7 @@ module Fusuma
           second_keycode = key_to_code(keybinds[1])
 
           @emergency_stop = lambda do |prev, current|
-            if (prev&.code == first_keycode && prev.value != 0) && (current.code == second_keycode && current.value != 0)
+            if prev&.code == first_keycode && prev.value != 0 && current.code == second_keycode && current.value != 0
               MultiLogger.info "Emergency ungrab keybind is pressed: #{keybinds[0]}+#{keybinds[1]}"
               @destroy.call
             end
@@ -364,6 +388,113 @@ module Fusuma
                 return false
               end
             end
+          end
+        end
+
+        # Search for remapping
+        # If modifier keys are pressed, first search with modifier+key
+        #
+        # @param mapping [Hash] remapping configuration
+        # @param input_key [String] input key name
+        # @return [Array] [remapped key, is modifier remap]
+        def find_remapping(mapping, input_key)
+          # If modifier keys are pressed, first search with modifier+key (e.g., "LEFTCTRL+A")
+          if @modifier_state&.pressed_modifiers&.any?
+            combined_key = @modifier_state.current_combination(input_key)
+            remapped = mapping.fetch(combined_key.to_sym, nil)
+            if remapped
+              # If remapped is an Array (output sequence), return as is
+              return [remapped.is_a?(Array) ? remapped : remapped.to_s, true]
+            end
+          end
+
+          # If not found, search with simple key (e.g., "A")
+          remapped = mapping.fetch(input_key.to_sym, nil)
+          # If remapped is an Array (output sequence), return as is
+          result = remapped.is_a?(Array) ? remapped : remapped&.to_s
+          [result, false]
+        end
+
+        # Execute remapping with modifier keys
+        # @param remapped [String, Array] remapped key (single or array)
+        # @param input_event [InputEvent] original input event
+        #
+        # === Output sequence support ===
+        # If remapped is an Array, send each element in order
+        # e.g., ["LEFTSHIFT+HOME", "DELETE"]
+        #      → Shift+Home (press/release) → Delete (press/release)
+        def execute_modifier_remap(remapped, input_event)
+          # 1. Temporarily release currently pressed modifier keys
+          release_current_modifiers
+
+          # 2. Send remapped key(s) (press + release)
+          # === Output sequence support ===
+          send_key_combination(remapped, input_event.type)
+
+          # 3. Re-press modifier keys
+          restore_current_modifiers
+        end
+
+        # Release currently pressed modifier keys
+        def release_current_modifiers
+          return unless @modifier_state
+
+          @modifier_state.pressed_modifiers.each do |modifier_key|
+            code = key_to_code(modifier_key)
+            next unless code
+
+            release_event = InputEvent.new(nil, EV_KEY, code, 0)
+            uinput_keyboard.write_input_event(release_event)
+          end
+        end
+
+        # Re-press modifier keys
+        def restore_current_modifiers
+          return unless @modifier_state
+
+          @modifier_state.pressed_modifiers.each do |modifier_key|
+            code = key_to_code(modifier_key)
+            next unless code
+
+            press_event = InputEvent.new(nil, EV_KEY, code, 1)
+            uinput_keyboard.write_input_event(press_event)
+          end
+        end
+
+        # Send a key combination (e.g., "LEFTCTRL+O" → press Ctrl, press O, release O, release Ctrl)
+        # @param key_input [String, Array] Key string or array
+        #   - String: Single key combination (e.g., "Q", "LEFTCTRL+O")
+        #   - Array: Output sequence (e.g., ["LEFTSHIFT+HOME", "DELETE"])
+        # @param event_type [Integer] Event type
+        # @return [void]
+        #
+        # === Output sequence support ===
+        # If Array, send each element in order
+        def send_key_combination(key_input, event_type)
+          # If Array, send each element in order
+          if key_input.is_a?(Array)
+            key_input.each { |key| send_key_combination(key.to_s, event_type) }
+            return
+          end
+
+          keys = key_input.to_s.split("+")
+
+          # Press all keys
+          keys.each do |key|
+            code = key_to_code(key)
+            next unless code
+
+            press_event = InputEvent.new(nil, event_type, code, 1)
+            uinput_keyboard.write_input_event(press_event)
+          end
+
+          # Release all keys in reverse order
+          keys.reverse.each do |key|
+            code = key_to_code(key)
+            next unless code
+
+            release_event = InputEvent.new(nil, event_type, code, 0)
+            uinput_keyboard.write_input_event(release_event)
           end
         end
 
