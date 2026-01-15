@@ -89,7 +89,7 @@ module Fusuma
 
             # Search for remapping with modifier keys
             # 1. If modifier keys are pressed, first search with modifier+key (e.g., "LEFTCTRL+A")
-            # 2. If not found, search with simple key (e.g., "A
+            # 2. If not found, search with simple key (e.g., "A")
             # 3. If matched with modifier, temporarily release original modifiers before sending remapped key
             remapped, is_modifier_remap = find_remapping(current_mapping, input_key)
             case remapped
@@ -101,6 +101,9 @@ module Fusuma
               # e.g., LEFTCTRL+U: [LEFTSHIFT+HOME, DELETE]
               #      → Send Shift+Home → Send Delete
               # Like modifier remap, temporarily release original modifiers before sending
+              if is_modifier_remap && input_event.value == 1
+                execute_modifier_remap(remapped, input_event)
+              end
               next
             when Hash
               # Command execution (e.g., {:SENDKEY=>"LEFTCTRL+BTN_LEFT", :CLEARMODIFIERS=>true})
@@ -120,6 +123,15 @@ module Fusuma
             # Release currently pressed modifiers → Send remapped key → Re-press modifiers
             if is_modifier_remap && input_event.value == 1
               execute_modifier_remap(remapped, input_event)
+              next
+            end
+
+            # Handle key combination output (e.g., "LEFTALT+LEFT")
+            # If remapped value contains "+", it's a key combination that needs special handling
+            if remapped.to_s.include?("+")
+              if input_event.value == 1 # only on key press
+                send_key_combination(remapped, input_event.type)
+              end
               next
             end
 

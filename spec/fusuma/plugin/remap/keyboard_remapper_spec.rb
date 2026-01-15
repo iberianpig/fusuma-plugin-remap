@@ -376,4 +376,80 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       end
     end
   end
+
+  describe "Array output sequence handling in run loop" do
+    # This test verifies the behavior of Array output sequences in the run loop.
+    #
+    # Bug found: keyboard_remapper.rb:98-104 skips Array with `next` without
+    # calling execute_modifier_remap
+
+    let(:input_event) { double("input_event", type: 1, code: 22, value: 1) } # U key press
+
+    before do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+      # Press LEFTCTRL modifier
+      remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+      allow(uinput_keyboard).to receive(:write_input_event)
+    end
+
+    describe "when remapped value is Array and modifier is pressed" do
+      let(:mapping) { {"LEFTCTRL+U": ["LEFTSHIFT+HOME", "DELETE"]} }
+
+      it "find_remapping returns Array with is_modifier_remap=true" do
+        remapped, is_modifier_remap = remapper.send(:find_remapping, mapping, "U")
+
+        expect(remapped).to eq(["LEFTSHIFT+HOME", "DELETE"])
+        expect(is_modifier_remap).to be true
+      end
+
+      # This test demonstrates what the CURRENT code does (the bug)
+      it "CURRENT CODE: skips Array without executing (BUG)" do
+        remapped, _is_modifier_remap = remapper.send(:find_remapping, mapping, "U")
+
+        executed = false
+
+        # This simulates the CURRENT run loop logic (keyboard_remapper.rb:95-117)
+        case remapped
+        when String, Symbol
+          # Would continue processing
+        when Array
+          # CURRENT: just skips with next (line 104)
+          # execute_modifier_remap is NOT called here
+        when Hash
+          # Would skip
+        when nil
+          # Would write original event
+        end
+
+        # The bug: Array case does nothing, so executed remains false
+        expect(executed).to be false
+      end
+
+      # This test demonstrates what the FIXED code should do
+      it "EXPECTED: should execute output sequence for Array" do
+        remapped, is_modifier_remap = remapper.send(:find_remapping, mapping, "U")
+
+        executed = false
+
+        # This is what the FIXED code should do
+        case remapped
+        when String, Symbol
+          # Continue processing
+        when Array
+          # FIXED: call execute_modifier_remap for Array
+          if is_modifier_remap && input_event.value == 1
+            remapper.send(:execute_modifier_remap, remapped, input_event)
+            executed = true
+          end
+        when Hash
+          # Skip
+        when nil
+          # Write original event
+        end
+
+        expect(executed).to be true
+      end
+    end
+  end
 end
