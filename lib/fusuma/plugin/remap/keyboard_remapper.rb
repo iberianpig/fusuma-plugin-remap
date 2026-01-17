@@ -520,27 +520,40 @@ module Fusuma
           # If no device is found, it will wait for 3 seconds and try again
           # @return [Array<Revdev::EventDevice>]
           def select
-            displayed_no_keyboard = false
+            logged_no_device = false
             loop do
-              Fusuma::Device.reset # reset cache to get the latest device information
-              devices = Fusuma::Device.all.select do |d|
-                next if d.name == VIRTUAL_KEYBOARD_NAME
+              keyboards = try_open_devices
 
-                Array(@names).any? { |name| d.name =~ /#{name}/ }
-              end
-              if devices.empty?
-                unless displayed_no_keyboard
+              if keyboards.empty?
+                unless logged_no_device
                   MultiLogger.warn "No keyboard found: #{@names}"
-                  displayed_no_keyboard = true
+                  logged_no_device = true
                 end
+
                 wait_for_device
-
-                next
+              else
+                return keyboards
               end
-
-              return devices.map { |d| Revdev::EventDevice.new("/dev/input/#{d.id}") }
             end
           end
+
+          def try_open_devices
+            Fusuma::Device.reset # reset cache to get the latest device information
+            devices = Fusuma::Device.all.select do |d|
+              next if d.name == VIRTUAL_KEYBOARD_NAME
+
+              Array(@names).any? { |name| d.name =~ /#{name}/ }
+            end
+
+            devices.filter_map do |d|
+              Revdev::EventDevice.new("/dev/input/#{d.id}")
+            rescue Errno::ENOENT, Errno::ENODEV => e
+              MultiLogger.warn "Failed to open #{d.name} (/dev/input/#{d.id}): #{e.message}"
+              nil
+            end
+          end
+
+          private
 
           def wait_for_device
             sleep 3

@@ -193,6 +193,75 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         end
       end
     end
+
+    describe "#try_open_devices" do
+      let(:selector) { described_class.new(["HHKB"]) }
+
+      before do
+        allow(Fusuma::Device).to receive(:reset)
+      end
+
+      context "when some devices fail to open with ENOENT" do
+        let(:valid_device) { double(Revdev::EventDevice) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7"),
+            Fusuma::Device.new(name: "HHKB-Consumer", id: "event8")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event7").and_return(valid_device)
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event8").and_raise(Errno::ENOENT, "/dev/input/event8")
+        end
+
+        it "returns only successfully opened devices" do
+          result = selector.try_open_devices
+          expect(result).to eq([valid_device])
+        end
+
+        it "logs warning for failed devices" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Failed to open/)
+          selector.try_open_devices
+        end
+      end
+
+      context "when some devices fail to open with ENODEV" do
+        let(:valid_device) { double(Revdev::EventDevice) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7"),
+            Fusuma::Device.new(name: "HHKB-System", id: "event9")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event7").and_return(valid_device)
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event9").and_raise(Errno::ENODEV, "/dev/input/event9")
+        end
+
+        it "returns only successfully opened devices" do
+          result = selector.try_open_devices
+          expect(result).to eq([valid_device])
+        end
+      end
+
+      context "when all devices fail to open" do
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .and_raise(Errno::ENOENT, "/dev/input/event7")
+          allow(Fusuma::MultiLogger).to receive(:warn)
+        end
+
+        it "returns empty array" do
+          result = selector.try_open_devices
+          expect(result).to eq([])
+        end
+      end
+    end
   end
 
   describe "#create_virtual_keyboard" do
