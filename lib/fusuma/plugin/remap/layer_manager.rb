@@ -9,6 +9,12 @@ module Fusuma
         require "singleton"
         include Singleton
 
+        # Priority order for context types (higher number = higher priority)
+        CONTEXT_PRIORITIES = {
+          thumbsense: 1,
+          application: 2
+        }.freeze
+
         attr_reader :reader, :writer, :current_layer, :layers
 
         def initialize
@@ -74,6 +80,56 @@ module Fusuma
 
             result || {}
           end
+        end
+
+        # Find merged mapping from all applicable layers
+        # Merges mappings from default, individual contexts, and complete match
+        # Higher priority contexts override lower priority ones
+        # @param [Hash] layer current active layer (e.g., { thumbsense: true, application: "Google-chrome" })
+        # @return [Hash] merged remap mapping
+        def find_merged_mapping(layer)
+          @merged_layers ||= {}
+          @merged_layers[layer] ||= merge_all_applicable_mappings(layer)
+        end
+
+        private
+
+        def merge_all_applicable_mappings(layer)
+          mappings = []
+
+          # 1. default (no context) - priority 0
+          default_mapping = find_mapping_for_context({})
+          mappings << [0, default_mapping] if default_mapping
+
+          # 2. Each single context key's mapping
+          layer.each do |key, value|
+            single_context = {key => value}
+            mapping = find_mapping_for_context(single_context)
+            if mapping
+              priority = CONTEXT_PRIORITIES.fetch(key, 1)
+              mappings << [priority, mapping]
+            end
+          end
+
+          # 3. Complete match (multiple keys) - highest priority
+          if layer.keys.size > 1
+            complete_mapping = find_mapping_for_context(layer)
+            mappings << [100, complete_mapping] if complete_mapping
+          end
+
+          # Merge in priority order (lower priority first, higher priority overwrites)
+          mappings.sort_by(&:first).reduce({}) { |merged, (_, m)| merged.merge(m) }
+        end
+
+        def find_mapping_for_context(context)
+          result = nil
+          Fusuma::Config::Searcher.with_context(context) do
+            result = Fusuma::Config.search(Fusuma::Config::Index.new(:remap))
+            next unless result
+
+            result = result.deep_transform_keys { |key| key.upcase.to_sym }
+          end
+          result
         end
       end
     end

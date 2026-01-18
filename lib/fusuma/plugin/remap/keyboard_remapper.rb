@@ -55,7 +55,7 @@ module Fusuma
                 next
               end
 
-              next_mapping = @layer_manager.find_mapping(layer)
+              next_mapping = @layer_manager.find_merged_mapping(layer)
               next
             end
 
