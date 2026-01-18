@@ -101,7 +101,7 @@ module Fusuma
               # e.g., LEFTCTRL+U: [LEFTSHIFT+HOME, DELETE]
               #      → Send Shift+Home → Send Delete
               # Like modifier remap, temporarily release original modifiers before sending
-              if is_modifier_remap && input_event.value == 1
+              if input_event.value == 1 # press only
                 execute_modifier_remap(remapped, input_event)
               end
               next
