@@ -49,7 +49,15 @@ module Fusuma
 
           loop do
             ios = IO.select([*@source_keyboards.map(&:file), @layer_manager.reader])
-            io = ios.first.first
+            readable_ios = ios.first
+
+            # Prioritize layer changes over keyboard events to ensure
+            # layer state is updated before processing key inputs
+            io = if readable_ios.include?(@layer_manager.reader)
+              @layer_manager.reader
+            else
+              readable_ios.first
+            end
 
             if io == @layer_manager.reader
               layer = @layer_manager.receive_layer # update @current_layer
