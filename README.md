@@ -128,6 +128,49 @@ remap:
   SPACE: BTN_LEFT
 ```
 
+#### Device Context
+
+You can define different remappings for specific keyboard devices. The `device` pattern uses case-insensitive partial matching against the physical device name.
+
+```yaml
+---
+# HHKB-specific remappings (matches device names containing "HHKB")
+context:
+  device: HHKB
+
+remap:
+  LEFTCTRL: LEFTMETA  # Swap Ctrl to Meta on HHKB
+
+---
+# Built-in keyboard remappings (matches "AT Translated Set 2 keyboard")
+context:
+  device: AT Translated
+
+remap:
+  LEFTALT: LEFTCTRL   # Remap Alt to Ctrl on built-in keyboard
+```
+
+To find your keyboard's device name, run:
+```sh
+libinput list-devices
+```
+
+#### Combined Contexts
+
+You can combine multiple context conditions. When multiple contexts are active, mappings are merged with priority order: `device` < `thumbsense` < `application`.
+
+```yaml
+---
+# HHKB + Thumbsense mode
+context:
+  device: HHKB
+  thumbsense: true
+
+remap:
+  J: BTN_LEFT
+  K: BTN_RIGHT
+```
+
 ### Complete Example
 
 ```yaml

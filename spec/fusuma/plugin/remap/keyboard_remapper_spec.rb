@@ -2,6 +2,7 @@ require "spec_helper"
 
 require "fusuma/plugin/remap/keyboard_remapper"
 require "fusuma/plugin/remap/device_selector"
+require "fusuma/plugin/remap/device_matcher"
 require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
@@ -619,6 +620,89 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
       output_key = remapped || ((effective_key != "CAPSLOCK") ? effective_key : nil)
       expect(output_key).to eq("LEFTCTRL")
+    end
+  end
+
+  describe "device-specific remapping" do
+    let(:device_matcher) { instance_double(Fusuma::Plugin::Remap::DeviceMatcher) }
+    let(:hhkb_mapping) { {LEFTCTRL: "LEFTMETA"} }
+    let(:internal_mapping) { {LEFTALT: "LEFTCTRL"} }
+    let(:default_mapping) { {CAPSLOCK: "LEFTCTRL"} }
+
+    before do
+      allow(Fusuma::Plugin::Remap::DeviceMatcher).to receive(:new).and_return(device_matcher)
+      allow(layer_manager).to receive(:find_merged_mapping).and_return({})
+    end
+
+    describe "#get_mapping_for_device" do
+      before do
+        remapper.instance_variable_set(:@device_matcher, device_matcher)
+      end
+
+      context "when device name matches a pattern" do
+        before do
+          allow(device_matcher).to receive(:match).with("PFU HHKB-Hybrid").and_return("HHKB")
+          allow(layer_manager).to receive(:find_merged_mapping)
+            .with({device: "HHKB"})
+            .and_return(hhkb_mapping)
+        end
+
+        it "returns device-specific mapping" do
+          result = remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+          expect(result).to eq(hhkb_mapping)
+        end
+
+        it "merges layer and device info when calling LayerManager" do
+          expect(layer_manager).to receive(:find_merged_mapping)
+            .with({thumbsense: true, device: "HHKB"})
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {thumbsense: true})
+        end
+      end
+
+      context "when device name does not match any pattern" do
+        before do
+          allow(device_matcher).to receive(:match).with("Unknown Keyboard").and_return(nil)
+          allow(layer_manager).to receive(:find_merged_mapping)
+            .with({})
+            .and_return(default_mapping)
+        end
+
+        it "returns default mapping" do
+          result = remapper.send(:get_mapping_for_device, "Unknown Keyboard", {})
+          expect(result).to eq(default_mapping)
+        end
+
+        it "calls LayerManager without device info" do
+          expect(layer_manager).to receive(:find_merged_mapping).with({})
+          remapper.send(:get_mapping_for_device, "Unknown Keyboard", {})
+        end
+      end
+
+      context "caching behavior" do
+        before do
+          allow(device_matcher).to receive(:match).with("PFU HHKB-Hybrid").and_return("HHKB")
+          allow(layer_manager).to receive(:find_merged_mapping).and_return(hhkb_mapping)
+        end
+
+        it "caches mapping for same device and layer combination" do
+          expect(layer_manager).to receive(:find_merged_mapping).once
+
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+        end
+
+        it "fetches mapping separately for different devices" do
+          allow(device_matcher).to receive(:match).with("AT Translated").and_return("AT Translated")
+          allow(layer_manager).to receive(:find_merged_mapping)
+            .with({device: "AT Translated"})
+            .and_return(internal_mapping)
+
+          expect(layer_manager).to receive(:find_merged_mapping).twice
+
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+          remapper.send(:get_mapping_for_device, "AT Translated", {})
+        end
+      end
     end
   end
 end

@@ -14,12 +14,93 @@ RSpec.describe Fusuma::Plugin::Remap::LayerManager do
   end
 
   describe "CONTEXT_PRIORITIES" do
-    it "defines thumbsense with priority 1" do
-      expect(described_class::CONTEXT_PRIORITIES[:thumbsense]).to eq(1)
+    it "defines device with priority 1" do
+      expect(described_class::CONTEXT_PRIORITIES[:device]).to eq(1)
     end
 
-    it "defines application with priority 2" do
-      expect(described_class::CONTEXT_PRIORITIES[:application]).to eq(2)
+    it "defines thumbsense with priority 2" do
+      expect(described_class::CONTEXT_PRIORITIES[:thumbsense]).to eq(2)
+    end
+
+    it "defines application with priority 3" do
+      expect(described_class::CONTEXT_PRIORITIES[:application]).to eq(3)
+    end
+
+    it "follows priority order: device < thumbsense < application" do
+      priorities = described_class::CONTEXT_PRIORITIES
+      expect(priorities[:device]).to be < priorities[:thumbsense]
+      expect(priorities[:thumbsense]).to be < priorities[:application]
+    end
+  end
+
+  describe "device context" do
+    # Helper to set up config search results based on context
+    def stub_config_for_contexts(context_mappings)
+      allow(Fusuma::Config::Searcher).to receive(:with_context) do |context, &block|
+        result = context_mappings[context]
+        if result
+          allow(Fusuma::Config).to receive(:search).and_return(result)
+        else
+          allow(Fusuma::Config).to receive(:search).and_return(nil)
+        end
+        block.call
+      end
+    end
+
+    context "with default + device contexts" do
+      let(:default_mapping) { {"capslock" => "leftctrl"} }
+      let(:device_mapping) { {"leftctrl" => "leftmeta"} }
+
+      before do
+        stub_config_for_contexts(
+          {} => default_mapping,
+          {device: "HHKB"} => device_mapping
+        )
+      end
+
+      it "merges default and device mappings" do
+        result = manager.find_merged_mapping({device: "HHKB"})
+        expect(result).to include(CAPSLOCK: "leftctrl")
+        expect(result).to include(LEFTCTRL: "leftmeta")
+      end
+    end
+
+    context "with device + thumbsense contexts" do
+      let(:device_mapping) { {"a" => "device_value"} }
+      let(:thumbsense_mapping) { {"a" => "thumbsense_value"} }
+
+      before do
+        stub_config_for_contexts(
+          {device: "HHKB"} => device_mapping,
+          {thumbsense: true} => thumbsense_mapping
+        )
+      end
+
+      it "thumbsense overrides device for same key" do
+        layer = {device: "HHKB", thumbsense: true}
+        result = manager.find_merged_mapping(layer)
+        expect(result[:A]).to eq("thumbsense_value")
+      end
+    end
+
+    context "with device + thumbsense + application contexts" do
+      let(:device_mapping) { {"a" => "device"} }
+      let(:thumbsense_mapping) { {"a" => "thumbsense"} }
+      let(:application_mapping) { {"a" => "application"} }
+
+      before do
+        stub_config_for_contexts(
+          {device: "HHKB"} => device_mapping,
+          {thumbsense: true} => thumbsense_mapping,
+          {application: "Chrome"} => application_mapping
+        )
+      end
+
+      it "overrides with priority order: application > thumbsense > device" do
+        layer = {device: "HHKB", thumbsense: true, application: "Chrome"}
+        result = manager.find_merged_mapping(layer)
+        expect(result[:A]).to eq("application")
+      end
     end
   end
 
@@ -47,7 +128,7 @@ RSpec.describe Fusuma::Plugin::Remap::LayerManager do
 
       it "returns default mapping when layer is empty" do
         result = manager.find_merged_mapping({})
-        expect(result).to eq({:"LEFTCTRL+A" => "home", :"LEFTCTRL+E" => "end"})
+        expect(result).to eq({"LEFTCTRL+A": "home", "LEFTCTRL+E": "end"})
       end
     end
 
@@ -77,8 +158,8 @@ RSpec.describe Fusuma::Plugin::Remap::LayerManager do
 
       it "merges default and thumbsense mappings" do
         result = manager.find_merged_mapping({thumbsense: true})
-        expect(result).to include(:"LEFTCTRL+A" => "home")
-        expect(result).to include(:"LEFTCTRL+E" => "end")
+        expect(result).to include("LEFTCTRL+A": "home")
+        expect(result).to include("LEFTCTRL+E": "end")
         expect(result).to include(J: "btn_left")
       end
     end
