@@ -41,20 +41,83 @@ $ sudo gem install fusuma-plugin-remap
 
 ### Remap
 
-Currently, remapping is only possible in the thumbsense context.
-Please install [fusuma-plugin-thumbsense](https://github.com/iberianpig/fusuma-plugin-thumbsense)
+You can remap keys in `~/.config/fusuma/config.yml`. The `remap` section defines key remappings.
 
-First, add the 'thumbsense' context to `~/.config/fusuma/config.yml`.
-The context is separated by `---` and specified by `context: { thumbsense: true }`.
+#### Basic Remap
 
-### Example
-
-Set the following code in `~/.config/fusuma/config.yml`.
+Simple key-to-key remapping without any context:
 
 ```yaml
+remap:
+  CAPSLOCK: LEFTCTRL
+  LEFTALT: LEFTMETA
+  LEFTMETA: LEFTALT
+```
 
+#### Key Alias for Modifiers
+
+When a simple key remap is defined (e.g., `CAPSLOCK: LEFTCTRL`), the key acts as an **alias** for the target modifier. The modifier state tracks the remapped key, not the physical key.
+
+```yaml
+remap:
+  CAPSLOCK: LEFTCTRL  # CAPSLOCK acts as LEFTCTRL alias
+  LEFTCTRL+LEFTSHIFT+J: LEFTMETA+LEFTCTRL+DOWN  # Combination using the alias
+```
+
+With this configuration:
+- Physical `CAPSLOCK` is treated as `LEFTCTRL`
+- Physical `CAPSLOCK+LEFTSHIFT+J` triggers `LEFTCTRL+LEFTSHIFT+J` combination
+- This outputs `LEFTMETA+LEFTCTRL+DOWN`
+
+#### Output Sequence
+
+You can send multiple key combinations in sequence using an array:
+
+```yaml
+remap:
+  LEFTCTRL+U: [LEFTSHIFT+HOME, DELETE]  # Select to line start, then delete
+  LEFTCTRL+K: [LEFTSHIFT+END, DELETE]   # Select to line end, then delete
+```
+
+#### Modifier + Key Combinations
+
+Remap modifier key combinations to other keys or combinations:
+
+```yaml
+remap:
+  LEFTCTRL+J: DOWN
+  LEFTCTRL+K: UP
+  LEFTCTRL+H: LEFT
+  LEFTCTRL+L: RIGHT
+  LEFTALT+N: LEFTCTRL+TAB           # Next tab
+  LEFTALT+P: LEFTCTRL+LEFTSHIFT+TAB # Previous tab
+```
+
+### Context
+
+You can define different remappings for different contexts. Contexts are separated by `---`.
+
+#### Application Context
+
+Remap keys only for specific applications:
+
+```yaml
 ---
-context: 
+context:
+  application: Alacritty
+
+remap:
+  LEFTMETA+N: LEFTCTRL+LEFTSHIFT+T  # New tab in terminal
+  LEFTMETA+W: LEFTCTRL+LEFTSHIFT+W  # Close tab
+```
+
+#### Thumbsense Context
+
+For thumbsense mode, install [fusuma-plugin-thumbsense](https://github.com/iberianpig/fusuma-plugin-thumbsense):
+
+```yaml
+---
+context:
   thumbsense: true
 
 remap:
@@ -63,6 +126,35 @@ remap:
   F: BTN_LEFT
   D: BTN_RIGHT
   SPACE: BTN_LEFT
+```
+
+### Complete Example
+
+```yaml
+# Default remappings (always active)
+remap:
+  CAPSLOCK: LEFTCTRL
+  LEFTALT: LEFTMETA
+  LEFTMETA: LEFTALT
+  LEFTCTRL+J: DOWN
+  LEFTCTRL+K: UP
+
+---
+# Application-specific remappings
+context:
+  application: Alacritty
+
+remap:
+  LEFTMETA+N: LEFTCTRL+LEFTSHIFT+T
+
+---
+# Thumbsense mode
+context:
+  thumbsense: true
+
+remap:
+  J: BTN_LEFT
+  K: BTN_RIGHT
 ```
 
 ## Emergency Stop Keybind for Virtual Keyboard

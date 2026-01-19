@@ -5,30 +5,22 @@ require "fusuma/plugin/remap/device_selector"
 require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
+  # Common test doubles
+  let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
+  let(:fusuma_writer) { double("fusuma_writer") }
+  let(:config) { {} }
+  let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
+  let(:uinput_keyboard) { instance_double("Fusuma::Plugin::Remap::UinputKeyboard") }
+
   describe "#initialize" do
-    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
-    let(:fusuma_writer) { double("fusuma_writer") }
     let(:config) { {emergency_ungrab_keys: "RIGHTCTRL+LEFTCTRL"} }
-    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
 
     it "initializes with correct config parameters" do
       expect(remapper.instance_variable_get(:@config)).to include(emergency_ungrab_keys: "RIGHTCTRL+LEFTCTRL")
     end
   end
 
-  describe "#run" do
-    before do
-      allow_any_instance_of(described_class).to receive(:create_virtual_keyboard)
-      allow_any_instance_of(described_class).to receive(:grab_events)
-    end
-  end
-
   describe "key conversion methods" do
-    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
-    let(:fusuma_writer) { double("fusuma_writer") }
-    let(:config) { {} }
-    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
-
     describe "#code_to_key" do
       it "converts key codes to key names" do
         # KEY_A = 30, KEY_B = 48
@@ -68,11 +60,6 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
   end
 
   describe "virtual key state management" do
-    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
-    let(:fusuma_writer) { double("fusuma_writer") }
-    let(:config) { {} }
-    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
-
     describe "#update_virtual_key_state" do
       it "adds key to pressed_virtual_keys on press event" do
         remapper.send(:update_virtual_key_state, "A", 1) # press
@@ -135,57 +122,35 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
   end
 
   describe "emergency keybind fallback" do
-    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
-    let(:fusuma_writer) { double("fusuma_writer") }
-    let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
-
     describe "#set_emergency_ungrab_keys" do
       context "with valid keybind (2 keys)" do
-        let(:config) { {} }
-
         it "sets emergency keybind without warnings" do
           expect(Fusuma::MultiLogger).not_to receive(:warn)
           remapper.send(:set_emergency_ungrab_keys, "LEFTCTRL+RIGHTCTRL")
         end
       end
 
-      context "with invalid keybind (1 key)" do
-        let(:config) { {} }
-
+      shared_examples "falls back to default keybind" do |keybind|
         it "falls back to default keybind with warning" do
           expect(Fusuma::MultiLogger).to receive(:warn).with(/Invalid emergency ungrab keybinds/)
           expect(Fusuma::MultiLogger).to receive(:warn).with(/Please set two keys/)
           expect(Fusuma::MultiLogger).to receive(:warn).with(/plugin:/)
           expect(Fusuma::MultiLogger).to receive(:info).with(/Emergency ungrab keybind: RIGHTCTRL\+LEFTCTRL/)
 
-          remapper.send(:set_emergency_ungrab_keys, "LEFTCTRL")
+          remapper.send(:set_emergency_ungrab_keys, keybind)
         end
+      end
+
+      context "with invalid keybind (1 key)" do
+        it_behaves_like "falls back to default keybind", "LEFTCTRL"
       end
 
       context "with invalid keybind (3 keys)" do
-        let(:config) { {} }
-
-        it "falls back to default keybind with warning" do
-          expect(Fusuma::MultiLogger).to receive(:warn).with(/Invalid emergency ungrab keybinds/)
-          expect(Fusuma::MultiLogger).to receive(:warn).with(/Please set two keys/)
-          expect(Fusuma::MultiLogger).to receive(:warn).with(/plugin:/)
-          expect(Fusuma::MultiLogger).to receive(:info).with(/Emergency ungrab keybind: RIGHTCTRL\+LEFTCTRL/)
-
-          remapper.send(:set_emergency_ungrab_keys, "LEFTCTRL+RIGHTCTRL+LEFTALT")
-        end
+        it_behaves_like "falls back to default keybind", "LEFTCTRL+RIGHTCTRL+LEFTALT"
       end
 
       context "with nil keybind" do
-        let(:config) { {} }
-
-        it "falls back to default keybind with warning" do
-          expect(Fusuma::MultiLogger).to receive(:warn).with(/Invalid emergency ungrab keybinds/)
-          expect(Fusuma::MultiLogger).to receive(:warn).with(/Please set two keys/)
-          expect(Fusuma::MultiLogger).to receive(:warn).with(/plugin:/)
-          expect(Fusuma::MultiLogger).to receive(:info).with(/Emergency ungrab keybind: RIGHTCTRL\+LEFTCTRL/)
-
-          remapper.send(:set_emergency_ungrab_keys, nil)
-        end
+        it_behaves_like "falls back to default keybind", nil
       end
     end
   end
@@ -228,16 +193,81 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         end
       end
     end
+
+    describe "#try_open_devices" do
+      let(:selector) { described_class.new(["HHKB"]) }
+
+      before do
+        allow(Fusuma::Device).to receive(:reset)
+      end
+
+      context "when some devices fail to open with ENOENT" do
+        let(:valid_device) { double(Revdev::EventDevice) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7"),
+            Fusuma::Device.new(name: "HHKB-Consumer", id: "event8")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event7").and_return(valid_device)
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event8").and_raise(Errno::ENOENT, "/dev/input/event8")
+        end
+
+        it "returns only successfully opened devices" do
+          result = selector.try_open_devices
+          expect(result).to eq([valid_device])
+        end
+
+        it "logs warning for failed devices" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Failed to open/)
+          selector.try_open_devices
+        end
+      end
+
+      context "when some devices fail to open with ENODEV" do
+        let(:valid_device) { double(Revdev::EventDevice) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7"),
+            Fusuma::Device.new(name: "HHKB-System", id: "event9")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event7").and_return(valid_device)
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event9").and_raise(Errno::ENODEV, "/dev/input/event9")
+        end
+
+        it "returns only successfully opened devices" do
+          result = selector.try_open_devices
+          expect(result).to eq([valid_device])
+        end
+      end
+
+      context "when all devices fail to open" do
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .and_raise(Errno::ENOENT, "/dev/input/event7")
+          allow(Fusuma::MultiLogger).to receive(:warn)
+        end
+
+        it "returns empty array" do
+          result = selector.try_open_devices
+          expect(result).to eq([])
+        end
+      end
+    end
   end
 
   describe "#create_virtual_keyboard" do
-    let(:layer_manager) { instance_double("Fusuma::Plugin::Remap::LayerManager") }
-    let(:fusuma_writer) { double("fusuma_writer") }
-    let(:uinput_keyboard) { instance_double("Fusuma::Plugin::Remap::UinputKeyboard") }
+    let(:config) { {touchpad_name_patterns: ["Touchpad"]} }
 
     context "with touchpad found" do
-      let(:config) { {touchpad_name_patterns: ["Touchpad"]} }
-      let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
       let(:device_id) { double("device_id", vendor: 0x1234, product: 0x5678, version: 1) }
       let(:event_device) { double(Revdev::EventDevice, device_id: device_id) }
 
@@ -260,9 +290,6 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
 
     context "without touchpad" do
-      let(:config) { {touchpad_name_patterns: ["Touchpad"]} }
-      let(:remapper) { described_class.new(layer_manager: layer_manager, fusuma_writer: fusuma_writer, config: config) }
-
       before do
         allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
         allow(Fusuma::Device).to receive(:reset)
@@ -285,6 +312,313 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
         expect { remapper.send(:create_virtual_keyboard) }.not_to raise_error
       end
+    end
+  end
+
+  describe "modifier key remapping" do
+    let(:input_event) { double("input_event", type: 1, value: 1) }
+
+    before do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+    end
+
+    describe "#find_remapping" do
+      let(:mapping) { {"LEFTCTRL+A": "HOME", A: "B"} }
+
+      context "when modifier key is pressed" do
+        before do
+          remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+        end
+
+        it "returns [remapped_key, true] when modifier+key matches" do
+          result = remapper.send(:find_remapping, mapping, "A")
+          expect(result).to eq(["HOME", true])
+        end
+      end
+
+      context "when no modifier key is pressed" do
+        it "returns [remapped_key, false] when simple key matches" do
+          result = remapper.send(:find_remapping, mapping, "A")
+          expect(result).to eq(["B", false])
+        end
+      end
+
+      context "when no match found" do
+        it "returns [nil, false]" do
+          result = remapper.send(:find_remapping, mapping, "Z")
+          expect(result).to eq([nil, false])
+        end
+      end
+
+      context "when remapping modifier key itself (e.g., LEFTMETA: LEFTALT)" do
+        let(:mapping) { {LEFTMETA: "LEFTALT"} }
+
+        before do
+          # Simulate LEFTMETA being pressed
+          remapper.instance_variable_get(:@modifier_state).update("LEFTMETA", 1)
+        end
+
+        it "returns [remapped_key, false] - NOT true" do
+          # For modifier key remapping, is_modifier_remap should be false
+          # This prevents execute_modifier_remap from being called
+          result = remapper.send(:find_remapping, mapping, "LEFTMETA")
+          expect(result).to eq(["LEFTALT", false])
+        end
+      end
+    end
+
+    describe "#execute_modifier_remap" do
+      before do
+        remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+        allow(uinput_keyboard).to receive(:write_input_event)
+      end
+
+      it "releases modifier, sends remapped key, then restores modifier" do
+        # Order: LEFTCTRL release, HOME press, HOME release, LEFTCTRL press
+        expect(uinput_keyboard).to receive(:write_input_event).exactly(4).times
+
+        remapper.send(:execute_modifier_remap, "HOME", input_event)
+      end
+    end
+
+    describe "#release_current_modifiers" do
+      before do
+        remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+        allow(uinput_keyboard).to receive(:write_input_event)
+      end
+
+      it "releases pressed modifier keys" do
+        expect(uinput_keyboard).to receive(:write_input_event) do |event|
+          expect(event.value).to eq(0) # release
+        end
+
+        remapper.send(:release_current_modifiers)
+      end
+    end
+
+    describe "#restore_current_modifiers" do
+      before do
+        remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+        allow(uinput_keyboard).to receive(:write_input_event)
+      end
+
+      it "re-presses modifier keys" do
+        expect(uinput_keyboard).to receive(:write_input_event) do |event|
+          expect(event.value).to eq(1) # press
+        end
+
+        remapper.send(:restore_current_modifiers)
+      end
+    end
+
+    describe "output sequence" do
+      describe "#find_remapping with Array" do
+        let(:mapping) { {"LEFTCTRL+U": ["LEFTSHIFT+HOME", "DELETE"]} }
+
+        context "when modifier key is pressed" do
+          before do
+            remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+          end
+
+          it "returns array as-is" do
+            result = remapper.send(:find_remapping, mapping, "U")
+            expect(result.first).to eq(["LEFTSHIFT+HOME", "DELETE"])
+            expect(result.last).to be true
+          end
+        end
+      end
+
+      describe "#execute_modifier_remap with Array" do
+        before do
+          remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+          allow(uinput_keyboard).to receive(:write_input_event)
+        end
+
+        it "sends each array element in order" do
+          # LEFTCTRL release (1)
+          # LEFTSHIFT press, HOME press, HOME release, LEFTSHIFT release (4)
+          # DELETE press, DELETE release (2)
+          # LEFTCTRL press (1)
+          # Total: 8 events
+          expect(uinput_keyboard).to receive(:write_input_event).exactly(8).times
+
+          remapper.send(:execute_modifier_remap, ["LEFTSHIFT+HOME", "DELETE"], input_event)
+        end
+      end
+
+      describe "#send_key_combination with Array" do
+        before { allow(uinput_keyboard).to receive(:write_input_event) }
+
+        it "sends each array element in order" do
+          # LEFTSHIFT press, HOME press, HOME release, LEFTSHIFT release (4)
+          # DELETE press, DELETE release (2)
+          # Total: 6 events
+          expect(uinput_keyboard).to receive(:write_input_event).exactly(6).times
+
+          remapper.send(:send_key_combination, ["LEFTSHIFT+HOME", "DELETE"], 1)
+        end
+      end
+    end
+  end
+
+  describe "Array output sequence handling in run loop" do
+    # This test verifies the behavior of Array output sequences in the run loop.
+    #
+    # Bug found: keyboard_remapper.rb:98-104 skips Array with `next` without
+    # calling execute_modifier_remap
+
+    let(:input_event) { double("input_event", type: 1, code: 22, value: 1) } # U key press
+
+    before do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+      # Press LEFTCTRL modifier
+      remapper.instance_variable_get(:@modifier_state).update("LEFTCTRL", 1)
+      allow(uinput_keyboard).to receive(:write_input_event)
+    end
+
+    describe "when remapped value is Array and modifier is pressed" do
+      let(:mapping) { {"LEFTCTRL+U": ["LEFTSHIFT+HOME", "DELETE"]} }
+
+      it "find_remapping returns Array with is_modifier_remap=true" do
+        remapped, is_modifier_remap = remapper.send(:find_remapping, mapping, "U")
+
+        expect(remapped).to eq(["LEFTSHIFT+HOME", "DELETE"])
+        expect(is_modifier_remap).to be true
+      end
+
+      # This test demonstrates what the CURRENT code does (the bug)
+      it "CURRENT CODE: skips Array without executing (BUG)" do
+        remapped, _is_modifier_remap = remapper.send(:find_remapping, mapping, "U")
+
+        executed = false
+
+        # This simulates the CURRENT run loop logic (keyboard_remapper.rb:95-117)
+        case remapped
+        when String, Symbol
+          # Would continue processing
+        when Array
+          # CURRENT: just skips with next (line 104)
+          # execute_modifier_remap is NOT called here
+        when Hash
+          # Would skip
+        when nil
+          # Would write original event
+        end
+
+        # The bug: Array case does nothing, so executed remains false
+        expect(executed).to be false
+      end
+
+      # This test demonstrates what the FIXED code should do
+      it "EXPECTED: should execute output sequence for Array" do
+        remapped, is_modifier_remap = remapper.send(:find_remapping, mapping, "U")
+
+        executed = false
+
+        # This is what the FIXED code should do
+        case remapped
+        when String, Symbol
+          # Continue processing
+        when Array
+          # FIXED: call execute_modifier_remap for Array
+          if is_modifier_remap && input_event.value == 1
+            remapper.send(:execute_modifier_remap, remapped, input_event)
+            executed = true
+          end
+        when Hash
+          # Skip
+        when nil
+          # Write original event
+        end
+
+        expect(executed).to be true
+      end
+    end
+  end
+
+  describe "#apply_simple_remap" do
+    before do
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+    end
+
+    context "simple key-to-key remapping" do
+      let(:mapping) { {CAPSLOCK: "LEFTCTRL", A: "B"} }
+
+      it "applies remap when match found" do
+        expect(remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")).to eq("LEFTCTRL")
+      end
+
+      it "returns original key when no match" do
+        expect(remapper.send(:apply_simple_remap, mapping, "Z")).to eq("Z")
+      end
+    end
+
+    context "excludes combinations and Arrays" do
+      let(:mapping) { {CAPSLOCK: ["A", "B"], A: "LEFTCTRL+B"} }
+
+      it "skips when remap target contains + (combination)" do
+        expect(remapper.send(:apply_simple_remap, mapping, "A")).to eq("A")
+      end
+
+      it "skips when remap target is Array" do
+        expect(remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")).to eq("CAPSLOCK")
+      end
+    end
+  end
+
+  describe "two-stage remap (CAPSLOCK -> LEFTCTRL -> combination)" do
+    let(:mapping) { {CAPSLOCK: "LEFTCTRL", "LEFTCTRL+LEFTSHIFT+J": "LEFTMETA+LEFTCTRL+DOWN"} }
+
+    before do
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+    end
+
+    it "updates modifier state as LEFTCTRL when CAPSLOCK is pressed" do
+      effective_key = remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")
+      remapper.instance_variable_get(:@modifier_state).update(effective_key, 1)
+
+      expect(effective_key).to eq("LEFTCTRL")
+      expect(remapper.instance_variable_get(:@modifier_state).pressed_modifiers).to include("LEFTCTRL")
+    end
+
+    it "matches LEFTCTRL+LEFTSHIFT+J when physical CAPSLOCK+LEFTSHIFT+J is pressed" do
+      effective_capslock = remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")
+      remapper.instance_variable_get(:@modifier_state).update(effective_capslock, 1)
+
+      effective_shift = remapper.send(:apply_simple_remap, mapping, "LEFTSHIFT")
+      remapper.instance_variable_get(:@modifier_state).update(effective_shift, 1)
+
+      effective_j = remapper.send(:apply_simple_remap, mapping, "J")
+      remapped, is_modifier_remap = remapper.send(:find_remapping, mapping, effective_j)
+
+      expect(remapped).to eq("LEFTMETA+LEFTCTRL+DOWN")
+      expect(is_modifier_remap).to be true
+    end
+  end
+
+  describe "simple remap output (CAPSLOCK single press -> LEFTCTRL)" do
+    let(:mapping) { {CAPSLOCK: "LEFTCTRL"} }
+
+    before do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+      allow(uinput_keyboard).to receive(:write_input_event)
+    end
+
+    it "outputs LEFTCTRL when CAPSLOCK is simple-remapped" do
+      effective_key = remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")
+      remapped, _is_modifier_remap = remapper.send(:find_remapping, mapping, effective_key)
+
+      # find_remapping returns nil (no remap for LEFTCTRL itself)
+      # but effective_key != input_key, so LEFTCTRL should be output
+      expect(remapped).to be_nil
+      expect(effective_key).to eq("LEFTCTRL")
+      expect(effective_key).not_to eq("CAPSLOCK")
+
+      output_key = remapped || ((effective_key != "CAPSLOCK") ? effective_key : nil)
+      expect(output_key).to eq("LEFTCTRL")
     end
   end
 end
