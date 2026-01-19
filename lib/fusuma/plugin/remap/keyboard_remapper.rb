@@ -16,6 +16,7 @@ module Fusuma
 
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
         DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
+        DEVICE_CHECK_INTERVAL = 3 # seconds - interval for checking new devices
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -48,7 +49,19 @@ module Fusuma
           current_mapping = {}
 
           loop do
-            ios = IO.select([*@source_keyboards.map(&:file), @layer_manager.reader])
+            ios = IO.select(
+              [*@source_keyboards.map(&:file), @layer_manager.reader],
+              nil,
+              nil,
+              DEVICE_CHECK_INTERVAL
+            )
+
+            # Timeout - check for new devices
+            if ios.nil?
+              check_and_add_new_devices
+              next
+            end
+
             readable_ios = ios.first
 
             # Prioritize layer changes over keyboard events to ensure
@@ -220,6 +233,45 @@ module Fusuma
           effective_layer = matched_pattern ? layer.merge(device: matched_pattern) : layer
           cache_key = [device_name, layer].hash
           @device_mappings[cache_key] ||= @layer_manager.find_merged_mapping(effective_layer)
+        end
+
+        # Check for newly connected devices and add them to source_keyboards
+        # Called periodically via IO.select timeout
+        def check_and_add_new_devices
+          current_device_paths = @source_keyboards.map { |kbd| kbd.file.path }
+
+          selector = KeyboardSelector.new(@config[:keyboard_name_patterns])
+          available_devices = selector.try_open_devices
+
+          new_devices = available_devices.reject do |device|
+            current_device_paths.include?(device.file.path)
+          end
+
+          # Close devices that are already in source_keyboards to avoid duplicate file handles
+          available_devices.each do |device|
+            device.file.close if current_device_paths.include?(device.file.path)
+          end
+
+          return if new_devices.empty?
+
+          MultiLogger.info("New keyboard(s) detected: #{new_devices.map(&:device_name)}")
+
+          grabbed_devices = []
+          new_devices.each do |device|
+            wait_release_all_keys(device)
+            begin
+              device.grab
+              MultiLogger.info "Grabbed keyboard: #{device.device_name}"
+              grabbed_devices << device
+            rescue Errno::EBUSY
+              MultiLogger.error "Failed to grab keyboard: #{device.device_name}"
+            end
+          end
+
+          return if grabbed_devices.empty?
+
+          @source_keyboards.concat(grabbed_devices)
+          @device_mappings = {} # Clear cache for new device configuration
         end
 
         def uinput_keyboard

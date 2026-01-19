@@ -705,4 +705,92 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       end
     end
   end
+
+  describe "#check_and_add_new_devices" do
+    let(:config) { {keyboard_name_patterns: ["HHKB", "keyboard"]} }
+    let(:existing_keyboard) { double("existing_keyboard", file: double("file", path: "/dev/input/event1")) }
+    let(:new_keyboard) { double("new_keyboard", file: double("file", path: "/dev/input/event2", close: nil), device_name: "HHKB-Keyboard") }
+
+    before do
+      remapper.instance_variable_set(:@source_keyboards, [existing_keyboard])
+      remapper.instance_variable_set(:@device_mappings, {some: "cache"})
+      allow(remapper).to receive(:wait_release_all_keys).and_return(true)
+    end
+
+    context "when new devices are found" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([
+          double("existing", file: double("file", path: "/dev/input/event1", close: nil)),
+          new_keyboard
+        ])
+        allow(new_keyboard).to receive(:grab)
+      end
+
+      it "adds new devices to source_keyboards" do
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).to include(new_keyboard)
+      end
+
+      it "grabs the new device" do
+        expect(new_keyboard).to receive(:grab)
+        remapper.send(:check_and_add_new_devices)
+      end
+
+      it "clears device mappings cache" do
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@device_mappings)).to eq({})
+      end
+
+      it "logs new device detection" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/New keyboard\(s\) detected/)
+        expect(Fusuma::MultiLogger).to receive(:info).with(/Grabbed keyboard/)
+        remapper.send(:check_and_add_new_devices)
+      end
+    end
+
+    context "when no new devices are found" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([
+          double("existing", file: double("file", path: "/dev/input/event1", close: nil))
+        ])
+      end
+
+      it "does not modify source_keyboards" do
+        original_keyboards = remapper.instance_variable_get(:@source_keyboards).dup
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).to eq(original_keyboards)
+      end
+
+      it "does not clear device mappings cache" do
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@device_mappings)).to eq({some: "cache"})
+      end
+    end
+
+    context "when grab fails with EBUSY" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([new_keyboard])
+        allow(new_keyboard).to receive(:grab).and_raise(Errno::EBUSY)
+      end
+
+      it "logs error and continues" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/New keyboard\(s\) detected/)
+        expect(Fusuma::MultiLogger).to receive(:error).with(/Failed to grab/)
+        remapper.send(:check_and_add_new_devices)
+      end
+
+      it "does not add device that failed to grab" do
+        allow(Fusuma::MultiLogger).to receive(:info)
+        allow(Fusuma::MultiLogger).to receive(:error)
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).not_to include(new_keyboard)
+      end
+    end
+  end
 end
