@@ -350,6 +350,22 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
           expect(result).to eq([nil, false])
         end
       end
+
+      context "when remapping modifier key itself (e.g., LEFTMETA: LEFTALT)" do
+        let(:mapping) { {LEFTMETA: "LEFTALT"} }
+
+        before do
+          # Simulate LEFTMETA being pressed
+          remapper.instance_variable_get(:@modifier_state).update("LEFTMETA", 1)
+        end
+
+        it "returns [remapped_key, false] - NOT true" do
+          # For modifier key remapping, is_modifier_remap should be false
+          # This prevents execute_modifier_remap from being called
+          result = remapper.send(:find_remapping, mapping, "LEFTMETA")
+          expect(result).to eq(["LEFTALT", false])
+        end
+      end
     end
 
     describe "#execute_modifier_remap" do
@@ -519,6 +535,90 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
         expect(executed).to be true
       end
+    end
+  end
+
+  describe "#apply_simple_remap" do
+    before do
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+    end
+
+    context "simple key-to-key remapping" do
+      let(:mapping) { {CAPSLOCK: "LEFTCTRL", A: "B"} }
+
+      it "applies remap when match found" do
+        expect(remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")).to eq("LEFTCTRL")
+      end
+
+      it "returns original key when no match" do
+        expect(remapper.send(:apply_simple_remap, mapping, "Z")).to eq("Z")
+      end
+    end
+
+    context "excludes combinations and Arrays" do
+      let(:mapping) { {CAPSLOCK: ["A", "B"], A: "LEFTCTRL+B"} }
+
+      it "skips when remap target contains + (combination)" do
+        expect(remapper.send(:apply_simple_remap, mapping, "A")).to eq("A")
+      end
+
+      it "skips when remap target is Array" do
+        expect(remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")).to eq("CAPSLOCK")
+      end
+    end
+  end
+
+  describe "two-stage remap (CAPSLOCK -> LEFTCTRL -> combination)" do
+    let(:mapping) { {CAPSLOCK: "LEFTCTRL", "LEFTCTRL+LEFTSHIFT+J": "LEFTMETA+LEFTCTRL+DOWN"} }
+
+    before do
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+    end
+
+    it "updates modifier state as LEFTCTRL when CAPSLOCK is pressed" do
+      effective_key = remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")
+      remapper.instance_variable_get(:@modifier_state).update(effective_key, 1)
+
+      expect(effective_key).to eq("LEFTCTRL")
+      expect(remapper.instance_variable_get(:@modifier_state).pressed_modifiers).to include("LEFTCTRL")
+    end
+
+    it "matches LEFTCTRL+LEFTSHIFT+J when physical CAPSLOCK+LEFTSHIFT+J is pressed" do
+      effective_capslock = remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")
+      remapper.instance_variable_get(:@modifier_state).update(effective_capslock, 1)
+
+      effective_shift = remapper.send(:apply_simple_remap, mapping, "LEFTSHIFT")
+      remapper.instance_variable_get(:@modifier_state).update(effective_shift, 1)
+
+      effective_j = remapper.send(:apply_simple_remap, mapping, "J")
+      remapped, is_modifier_remap = remapper.send(:find_remapping, mapping, effective_j)
+
+      expect(remapped).to eq("LEFTMETA+LEFTCTRL+DOWN")
+      expect(is_modifier_remap).to be true
+    end
+  end
+
+  describe "simple remap output (CAPSLOCK single press -> LEFTCTRL)" do
+    let(:mapping) { {CAPSLOCK: "LEFTCTRL"} }
+
+    before do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+      allow(uinput_keyboard).to receive(:write_input_event)
+    end
+
+    it "outputs LEFTCTRL when CAPSLOCK is simple-remapped" do
+      effective_key = remapper.send(:apply_simple_remap, mapping, "CAPSLOCK")
+      remapped, _is_modifier_remap = remapper.send(:find_remapping, mapping, effective_key)
+
+      # find_remapping returns nil (no remap for LEFTCTRL itself)
+      # but effective_key != input_key, so LEFTCTRL should be output
+      expect(remapped).to be_nil
+      expect(effective_key).to eq("LEFTCTRL")
+      expect(effective_key).not_to eq("CAPSLOCK")
+
+      output_key = remapped || ((effective_key != "CAPSLOCK") ? effective_key : nil)
+      expect(output_key).to eq("LEFTCTRL")
     end
   end
 end

@@ -67,13 +67,16 @@ module Fusuma
             input_event = @source_keyboards.find { |kbd| kbd.file == io }.read_input_event
             input_key = code_to_key(input_event.code)
 
+            # Apply simple key-to-key remapping first (modmap-style)
+            # e.g., CAPSLOCK -> LEFTCTRL, so modifier state tracks the remapped key
+            effective_key = apply_simple_remap(current_mapping, input_key)
+
             if input_event.type == EV_KEY
               @emergency_stop.call(old_ie, input_event)
 
               old_ie = input_event
 
-              # Update modifier key state
-              @modifier_state.update(input_key, input_event.value)
+              @modifier_state.update(effective_key, input_event.value)
 
               if input_event.value != 2 # repeat
                 data = {key: input_key, status: input_event.value, layer: layer}
@@ -87,21 +90,13 @@ module Fusuma
               end
             end
 
-            # Search for remapping with modifier keys
-            # 1. If modifier keys are pressed, first search with modifier+key (e.g., "LEFTCTRL+A")
-            # 2. If not found, search with simple key (e.g., "A")
-            # 3. If matched with modifier, temporarily release original modifiers before sending remapped key
-            remapped, is_modifier_remap = find_remapping(current_mapping, input_key)
+            remapped, is_modifier_remap = find_remapping(current_mapping, effective_key)
             case remapped
             when String, Symbol
-              # Remapped to another key - continue processing below
+              # Continue to key output processing below
             when Array
-              # === Output sequence ===
-              # Send each element of the array in order
-              # e.g., LEFTCTRL+U: [LEFTSHIFT+HOME, DELETE]
-              #      → Send Shift+Home → Send Delete
-              # Like modifier remap, temporarily release original modifiers before sending
-              if input_event.value == 1 # press only
+              # Output sequence: e.g., [LEFTSHIFT+HOME, DELETE]
+              if input_event.value == 1
                 execute_modifier_remap(remapped, input_event)
               end
               next
@@ -110,11 +105,21 @@ module Fusuma
               # Skip input event processing and let Fusuma's Executor handle this
               next
             when nil
-              # Not remapped - write original key event as-is
-              uinput_keyboard.write_input_event(input_event)
+              if effective_key != input_key
+                # Output simple-remapped key (e.g., CAPSLOCK -> LEFTCTRL)
+                remapped_code = key_to_code(effective_key)
+                if remapped_code
+                  remapped_event = InputEvent.new(nil, input_event.type, remapped_code, input_event.value)
+                  update_virtual_key_state(effective_key, remapped_event.value)
+                  write_event_with_log(remapped_event, context: "simple remap from #{input_key}")
+                else
+                  write_event_with_log(input_event, context: "simple remap failed")
+                end
+              else
+                write_event_with_log(input_event, context: "passthrough")
+              end
               next
             else
-              # Invalid remapping configuration
               MultiLogger.warn("Invalid remapped value - type: #{remapped.class}, key: #{input_key}")
               next
             end
@@ -138,7 +143,7 @@ module Fusuma
             remapped_code = key_to_code(remapped)
             if remapped_code.nil?
               MultiLogger.warn("Invalid remapped value - unknown key: #{remapped}, input: #{input_key}")
-              uinput_keyboard.write_input_event(input_event)
+              write_event_with_log(input_event, context: "remap failed")
               next
             end
 
@@ -158,7 +163,7 @@ module Fusuma
             # this is because the command will be executed by fusuma process
             next if remapped_event.code.nil?
 
-            uinput_keyboard.write_input_event(remapped_event)
+            write_event_with_log(remapped_event, context: "remapped from #{input_key}")
           rescue Errno::ENODEV => e # device is removed
             MultiLogger.error "Device is removed: #{e.message}"
             @source_keyboards = reload_keyboards
@@ -403,6 +408,23 @@ module Fusuma
           end
         end
 
+        # Apply simple key-to-key remapping (modmap-style)
+        # - Returns remapped key if simple remap exists
+        # - Skips combinations (containing "+"), Arrays, and Hashes
+        # - Returns original key if no match
+        #
+        # @param mapping [Hash] remapping configuration
+        # @param key [String] input key name
+        # @return [String] remapped key or original key
+        def apply_simple_remap(mapping, key)
+          remapped = mapping.fetch(key.to_sym, nil)
+          if remapped.is_a?(String) && !remapped.include?("+")
+            remapped
+          else
+            key
+          end
+        end
+
         # Search for remapping
         # If modifier keys are pressed, first search with modifier+key
         #
@@ -415,8 +437,11 @@ module Fusuma
             combined_key = @modifier_state.current_combination(input_key)
             remapped = mapping.fetch(combined_key.to_sym, nil)
             if remapped
-              # If remapped is an Array (output sequence), return as is
-              return [remapped.is_a?(Array) ? remapped : remapped.to_s, true]
+              # For modifier key remapping (e.g., LEFTMETA: LEFTALT), set is_modifier_remap to false
+              # This distinguishes it from modifier+key combinations (e.g., LEFTCTRL+A: HOME)
+              # Modifier key itself should be remapped directly without execute_modifier_remap
+              is_modifier_remap = !@modifier_state.modifier?(input_key)
+              return [remapped.is_a?(Array) ? remapped : remapped.to_s, is_modifier_remap]
             end
           end
 
@@ -456,7 +481,7 @@ module Fusuma
             next unless code
 
             release_event = InputEvent.new(nil, EV_KEY, code, 0)
-            uinput_keyboard.write_input_event(release_event)
+            write_event_with_log(release_event, context: "modifier release")
           end
         end
 
@@ -469,7 +494,7 @@ module Fusuma
             next unless code
 
             press_event = InputEvent.new(nil, EV_KEY, code, 1)
-            uinput_keyboard.write_input_event(press_event)
+            write_event_with_log(press_event, context: "modifier restore")
           end
         end
 
@@ -497,7 +522,7 @@ module Fusuma
             next unless code
 
             press_event = InputEvent.new(nil, event_type, code, 1)
-            uinput_keyboard.write_input_event(press_event)
+            write_event_with_log(press_event, context: "combination")
           end
 
           # Release all keys in reverse order
@@ -506,8 +531,35 @@ module Fusuma
             next unless code
 
             release_event = InputEvent.new(nil, event_type, code, 0)
-            uinput_keyboard.write_input_event(release_event)
+            write_event_with_log(release_event, context: "combination")
           end
+        end
+
+        # Convert key event value to state string
+        # @param value [Integer] 0=released, 1=pressed, 2=repeat
+        # @return [String]
+        def value_to_state(value)
+          case value
+          when 0 then "released"
+          when 1 then "pressed"
+          when 2 then "repeat"
+          else "unknown(#{value})"
+          end
+        end
+
+        # Write input event with debug logging
+        # @param event [InputEvent] event to send
+        # @param context [String, nil] additional context info
+        def write_event_with_log(event, context: nil)
+          if event.type == EV_KEY
+            key = code_to_key(event.code)
+            state = value_to_state(event.value)
+            msg = "[REMAP] #{key} #{state}"
+            msg += " (#{context})" if context
+            MultiLogger.debug(msg)
+          end
+
+          uinput_keyboard.write_input_event(event)
         end
 
         # Devices to detect key presses and releases
