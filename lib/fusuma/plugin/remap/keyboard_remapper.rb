@@ -187,6 +187,7 @@ module Fusuma
             write_event_with_log(remapped_event, context: "remapped from #{input_key}")
           rescue Errno::ENODEV => e # device is removed
             MultiLogger.error "Device is removed: #{e.message}"
+            @device_mappings = {} # Clear cache for new device configuration
             @source_keyboards = reload_keyboards
           end
         rescue EOFError => e # device is closed
