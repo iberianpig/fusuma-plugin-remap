@@ -712,6 +712,30 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
   end
 
+  describe "non-EV_KEY event passthrough" do
+    # Non-keyboard events (EV_REL, EV_ABS, etc.) should be passed through without remapping
+    # This prevents event code collision issues (e.g., KEY_ESC=1 vs REL_Y=1)
+
+    # Linux input event type constants
+    let(:ev_key) { 1 }  # EV_KEY (keyboard/button events)
+    let(:ev_rel) { 2 }  # EV_REL (relative movement: mouse, TrackPoint)
+    let(:ev_abs) { 3 }  # EV_ABS (absolute position: touchpad)
+
+    describe "#should_skip_non_key_event?" do
+      it "returns false for EV_KEY events" do
+        expect(remapper.send(:should_skip_non_key_event?, ev_key)).to be false
+      end
+
+      it "returns true for EV_REL events (mouse/trackpoint movement)" do
+        expect(remapper.send(:should_skip_non_key_event?, ev_rel)).to be true
+      end
+
+      it "returns true for EV_ABS events (touchpad absolute position)" do
+        expect(remapper.send(:should_skip_non_key_event?, ev_abs)).to be true
+      end
+    end
+  end
+
   describe "#apply_simple_remap" do
     before do
       remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)

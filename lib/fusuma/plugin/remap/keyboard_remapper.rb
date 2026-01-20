@@ -87,6 +87,14 @@ module Fusuma
 
             source_keyboard = @source_keyboards.find { |kbd| kbd.file == io }
             input_event = source_keyboard.read_input_event
+
+            # Skip non-keyboard events (EV_REL, EV_ABS, etc.) - pass through as-is
+            # This prevents code collision issues (e.g., KEY_ESC=1 vs REL_Y=1)
+            if should_skip_non_key_event?(input_event.type)
+              write_event_with_log(input_event, context: "passthrough (non-key event)")
+              next
+            end
+
             current_device_name = source_keyboard.device_name
 
             # Get device-specific mapping
@@ -498,6 +506,16 @@ module Fusuma
               end
             end
           end
+        end
+
+        # Check if the event should skip remap processing (non-keyboard events)
+        # EV_REL (mouse/trackpoint movement) and EV_ABS (touchpad absolute position)
+        # should be passed through without remapping to avoid code collision issues
+        # (e.g., KEY_ESC=1 vs REL_Y=1)
+        # @param event_type [Integer] input event type (EV_KEY, EV_REL, EV_ABS, etc.)
+        # @return [Boolean] true if the event should be passed through without remapping
+        def should_skip_non_key_event?(event_type)
+          event_type != EV_KEY
         end
 
         # Separate mapping into "simple remap" and "combo remap"
