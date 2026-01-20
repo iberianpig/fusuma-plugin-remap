@@ -11,8 +11,9 @@ module Fusuma
 
         # Priority order for context types (higher number = higher priority)
         CONTEXT_PRIORITIES = {
-          thumbsense: 1,
-          application: 2
+          device: 1,
+          thumbsense: 2,
+          application: 3
         }.freeze
 
         attr_reader :reader, :writer, :current_layer, :layers

@@ -4,6 +4,7 @@ require "set"
 require_relative "layer_manager"
 require_relative "uinput_keyboard"
 require_relative "device_selector"
+require_relative "device_matcher"
 require_relative "modifier_state"
 require "fusuma/device"
 
@@ -15,6 +16,7 @@ module Fusuma
 
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
         DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
+        DEVICE_CHECK_INTERVAL = 3 # seconds - interval for checking new devices
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -31,6 +33,8 @@ module Fusuma
           @layer_manager = layer_manager # request to change layer
           @fusuma_writer = fusuma_writer # write event to original keyboard
           @config = config
+          @device_matcher = DeviceMatcher.new
+          @device_mappings = {}
         end
 
         def run
@@ -42,12 +46,31 @@ module Fusuma
 
           old_ie = nil
           layer = nil
-          next_mapping = nil
           current_mapping = {}
 
           loop do
-            ios = IO.select([*@source_keyboards.map(&:file), @layer_manager.reader])
-            io = ios.first.first
+            ios = IO.select(
+              [*@source_keyboards.map(&:file), @layer_manager.reader],
+              nil,
+              nil,
+              DEVICE_CHECK_INTERVAL
+            )
+
+            # Timeout - check for new devices
+            if ios.nil?
+              check_and_add_new_devices
+              next
+            end
+
+            readable_ios = ios.first
+
+            # Prioritize layer changes over keyboard events to ensure
+            # layer state is updated before processing key inputs
+            io = if readable_ios.include?(@layer_manager.reader)
+              @layer_manager.reader
+            else
+              readable_ios.first
+            end
 
             if io == @layer_manager.reader
               layer = @layer_manager.receive_layer # update @current_layer
@@ -55,16 +78,27 @@ module Fusuma
                 next
               end
 
-              next_mapping = @layer_manager.find_merged_mapping(layer)
+              # Clear device mapping cache when layer changes
+              @device_mappings = {}
+              @layer_changed = true
               next
             end
 
-            if next_mapping && virtual_keyboard_all_key_released?
-              current_mapping = next_mapping if current_mapping != next_mapping
-              next_mapping = nil
+            source_keyboard = @source_keyboards.find { |kbd| kbd.file == io }
+            input_event = source_keyboard.read_input_event
+            current_device_name = source_keyboard.device_name
+
+            # Get device-specific mapping
+            device_mapping = get_mapping_for_device(current_device_name, layer || {})
+
+            # Wait until all virtual keys are released before applying new mapping
+            if @layer_changed && virtual_keyboard_all_key_released?
+              @layer_changed = false
             end
 
-            input_event = @source_keyboards.find { |kbd| kbd.file == io }.read_input_event
+            # Use device-specific mapping (wait during layer change to prevent key stuck)
+            current_mapping = @layer_changed ? current_mapping : device_mapping
+
             input_key = code_to_key(input_event.code)
 
             # Apply simple key-to-key remapping first (modmap-style)
@@ -166,6 +200,7 @@ module Fusuma
             write_event_with_log(remapped_event, context: "remapped from #{input_key}")
           rescue Errno::ENODEV => e # device is removed
             MultiLogger.error "Device is removed: #{e.message}"
+            @device_mappings = {} # Clear cache for new device configuration
             @source_keyboards = reload_keyboards
           end
         rescue EOFError => e # device is closed
@@ -187,6 +222,56 @@ module Fusuma
         rescue => e
           MultiLogger.error "Failed to reload keyboards: #{e.message}"
           MultiLogger.error e.backtrace.join("\n")
+        end
+
+        # Get mapping for specific device from cache or LayerManager
+        # @param device_name [String] Physical device name
+        # @param layer [Hash] Layer information
+        # @return [Hash] Mapping for the device
+        def get_mapping_for_device(device_name, layer)
+          matched_pattern = @device_matcher.match(device_name)
+          effective_layer = matched_pattern ? layer.merge(device: matched_pattern) : layer
+          cache_key = [device_name, layer].hash
+          @device_mappings[cache_key] ||= @layer_manager.find_merged_mapping(effective_layer)
+        end
+
+        # Check for newly connected devices and add them to source_keyboards
+        # Called periodically via IO.select timeout
+        def check_and_add_new_devices
+          current_device_paths = @source_keyboards.map { |kbd| kbd.file.path }
+
+          selector = KeyboardSelector.new(@config[:keyboard_name_patterns])
+          available_devices = selector.try_open_devices
+
+          new_devices = available_devices.reject do |device|
+            current_device_paths.include?(device.file.path)
+          end
+
+          # Close devices that are already in source_keyboards to avoid duplicate file handles
+          available_devices.each do |device|
+            device.file.close if current_device_paths.include?(device.file.path)
+          end
+
+          return if new_devices.empty?
+
+          MultiLogger.info("New keyboard(s) detected: #{new_devices.map(&:device_name)}")
+
+          grabbed_devices = []
+          new_devices.each do |device|
+            wait_release_all_keys(device)
+            device.grab
+            MultiLogger.info "Grabbed keyboard: #{device.device_name}"
+            grabbed_devices << device
+          rescue Errno::EBUSY
+            MultiLogger.error "Failed to grab keyboard: #{device.device_name}"
+          rescue Errno::ENODEV
+            MultiLogger.warn "Device removed during grab: #{device.device_name}"
+          end
+
+          return if grabbed_devices.empty?
+
+          @source_keyboards.concat(grabbed_devices)
+          @device_mappings = {} # Clear cache for new device configuration
         end
 
         def uinput_keyboard
@@ -599,7 +684,7 @@ module Fusuma
 
             devices.filter_map do |d|
               Revdev::EventDevice.new("/dev/input/#{d.id}")
-            rescue Errno::ENOENT, Errno::ENODEV => e
+            rescue Errno::ENOENT, Errno::ENODEV, Errno::EACCES => e
               MultiLogger.warn "Failed to open #{d.name} (/dev/input/#{d.id}): #{e.message}"
               nil
             end

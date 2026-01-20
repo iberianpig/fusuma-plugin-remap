@@ -2,6 +2,7 @@ require "spec_helper"
 
 require "fusuma/plugin/remap/keyboard_remapper"
 require "fusuma/plugin/remap/device_selector"
+require "fusuma/plugin/remap/device_matcher"
 require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
@@ -259,6 +260,31 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         it "returns empty array" do
           result = selector.try_open_devices
           expect(result).to eq([])
+        end
+      end
+
+      context "when some devices fail to open with EACCES (Permission denied)" do
+        let(:valid_device) { double(Revdev::EventDevice) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7"),
+            Fusuma::Device.new(name: "HHKB-System", id: "event9")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event7").and_return(valid_device)
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event9").and_raise(Errno::EACCES, "/dev/input/event9")
+        end
+
+        it "returns only successfully opened devices" do
+          result = selector.try_open_devices
+          expect(result).to eq([valid_device])
+        end
+
+        it "logs warning for permission denied devices" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Failed to open.*Permission denied/)
+          selector.try_open_devices
         end
       end
     end
@@ -619,6 +645,199 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
       output_key = remapped || ((effective_key != "CAPSLOCK") ? effective_key : nil)
       expect(output_key).to eq("LEFTCTRL")
+    end
+  end
+
+  describe "device-specific remapping" do
+    let(:device_matcher) { instance_double(Fusuma::Plugin::Remap::DeviceMatcher) }
+    let(:hhkb_mapping) { {LEFTCTRL: "LEFTMETA"} }
+    let(:internal_mapping) { {LEFTALT: "LEFTCTRL"} }
+    let(:default_mapping) { {CAPSLOCK: "LEFTCTRL"} }
+
+    before do
+      allow(Fusuma::Plugin::Remap::DeviceMatcher).to receive(:new).and_return(device_matcher)
+      allow(layer_manager).to receive(:find_merged_mapping).and_return({})
+    end
+
+    describe "#get_mapping_for_device" do
+      before do
+        remapper.instance_variable_set(:@device_matcher, device_matcher)
+      end
+
+      context "when device name matches a pattern" do
+        before do
+          allow(device_matcher).to receive(:match).with("PFU HHKB-Hybrid").and_return("HHKB")
+          allow(layer_manager).to receive(:find_merged_mapping)
+            .with({device: "HHKB"})
+            .and_return(hhkb_mapping)
+        end
+
+        it "returns device-specific mapping" do
+          result = remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+          expect(result).to eq(hhkb_mapping)
+        end
+
+        it "merges layer and device info when calling LayerManager" do
+          expect(layer_manager).to receive(:find_merged_mapping)
+            .with({thumbsense: true, device: "HHKB"})
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {thumbsense: true})
+        end
+      end
+
+      context "when device name does not match any pattern" do
+        before do
+          allow(device_matcher).to receive(:match).with("Unknown Keyboard").and_return(nil)
+          allow(layer_manager).to receive(:find_merged_mapping)
+            .with({})
+            .and_return(default_mapping)
+        end
+
+        it "returns default mapping" do
+          result = remapper.send(:get_mapping_for_device, "Unknown Keyboard", {})
+          expect(result).to eq(default_mapping)
+        end
+
+        it "calls LayerManager without device info" do
+          expect(layer_manager).to receive(:find_merged_mapping).with({})
+          remapper.send(:get_mapping_for_device, "Unknown Keyboard", {})
+        end
+      end
+
+      context "caching behavior" do
+        before do
+          allow(device_matcher).to receive(:match).with("PFU HHKB-Hybrid").and_return("HHKB")
+          allow(layer_manager).to receive(:find_merged_mapping).and_return(hhkb_mapping)
+        end
+
+        it "caches mapping for same device and layer combination" do
+          expect(layer_manager).to receive(:find_merged_mapping).once
+
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+        end
+
+        it "fetches mapping separately for different devices" do
+          allow(device_matcher).to receive(:match).with("AT Translated").and_return("AT Translated")
+          allow(layer_manager).to receive(:find_merged_mapping)
+            .with({device: "AT Translated"})
+            .and_return(internal_mapping)
+
+          expect(layer_manager).to receive(:find_merged_mapping).twice
+
+          remapper.send(:get_mapping_for_device, "PFU HHKB-Hybrid", {})
+          remapper.send(:get_mapping_for_device, "AT Translated", {})
+        end
+      end
+    end
+  end
+
+  describe "#check_and_add_new_devices" do
+    let(:config) { {keyboard_name_patterns: ["HHKB", "keyboard"]} }
+    let(:existing_keyboard) { double("existing_keyboard", file: double("file", path: "/dev/input/event1")) }
+    let(:new_keyboard) { double("new_keyboard", file: double("file", path: "/dev/input/event2", close: nil), device_name: "HHKB-Keyboard") }
+
+    before do
+      remapper.instance_variable_set(:@source_keyboards, [existing_keyboard])
+      remapper.instance_variable_set(:@device_mappings, {some: "cache"})
+      allow(remapper).to receive(:wait_release_all_keys).and_return(true)
+    end
+
+    context "when new devices are found" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([
+          double("existing", file: double("file", path: "/dev/input/event1", close: nil)),
+          new_keyboard
+        ])
+        allow(new_keyboard).to receive(:grab)
+      end
+
+      it "adds new devices to source_keyboards" do
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).to include(new_keyboard)
+      end
+
+      it "grabs the new device" do
+        expect(new_keyboard).to receive(:grab)
+        remapper.send(:check_and_add_new_devices)
+      end
+
+      it "clears device mappings cache" do
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@device_mappings)).to eq({})
+      end
+
+      it "logs new device detection" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/New keyboard\(s\) detected/)
+        expect(Fusuma::MultiLogger).to receive(:info).with(/Grabbed keyboard/)
+        remapper.send(:check_and_add_new_devices)
+      end
+    end
+
+    context "when no new devices are found" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([
+          double("existing", file: double("file", path: "/dev/input/event1", close: nil))
+        ])
+      end
+
+      it "does not modify source_keyboards" do
+        original_keyboards = remapper.instance_variable_get(:@source_keyboards).dup
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).to eq(original_keyboards)
+      end
+
+      it "does not clear device mappings cache" do
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@device_mappings)).to eq({some: "cache"})
+      end
+    end
+
+    context "when grab fails with EBUSY" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([new_keyboard])
+        allow(new_keyboard).to receive(:grab).and_raise(Errno::EBUSY)
+      end
+
+      it "logs error and continues" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/New keyboard\(s\) detected/)
+        expect(Fusuma::MultiLogger).to receive(:error).with(/Failed to grab/)
+        remapper.send(:check_and_add_new_devices)
+      end
+
+      it "does not add device that failed to grab" do
+        allow(Fusuma::MultiLogger).to receive(:info)
+        allow(Fusuma::MultiLogger).to receive(:error)
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).not_to include(new_keyboard)
+      end
+    end
+
+    context "when device is removed during grab (ENODEV)" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([new_keyboard])
+        allow(remapper).to receive(:wait_release_all_keys).and_raise(Errno::ENODEV)
+      end
+
+      it "logs warning and continues" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/New keyboard\(s\) detected/)
+        expect(Fusuma::MultiLogger).to receive(:warn).with(/Device removed during grab/)
+        remapper.send(:check_and_add_new_devices)
+      end
+
+      it "does not add device that was removed" do
+        allow(Fusuma::MultiLogger).to receive(:info)
+        allow(Fusuma::MultiLogger).to receive(:warn)
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).not_to include(new_keyboard)
+      end
     end
   end
 end
