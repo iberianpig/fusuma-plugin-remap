@@ -262,6 +262,31 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
           expect(result).to eq([])
         end
       end
+
+      context "when some devices fail to open with EACCES (Permission denied)" do
+        let(:valid_device) { double(Revdev::EventDevice) }
+
+        before do
+          allow(Fusuma::Device).to receive(:all).and_return([
+            Fusuma::Device.new(name: "HHKB-Keyboard", id: "event7"),
+            Fusuma::Device.new(name: "HHKB-System", id: "event9")
+          ])
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event7").and_return(valid_device)
+          allow(Revdev::EventDevice).to receive(:new)
+            .with("/dev/input/event9").and_raise(Errno::EACCES, "/dev/input/event9")
+        end
+
+        it "returns only successfully opened devices" do
+          result = selector.try_open_devices
+          expect(result).to eq([valid_device])
+        end
+
+        it "logs warning for permission denied devices" do
+          expect(Fusuma::MultiLogger).to receive(:warn).with(/Failed to open.*Permission denied/)
+          selector.try_open_devices
+        end
+      end
     end
   end
 
@@ -788,6 +813,28 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       it "does not add device that failed to grab" do
         allow(Fusuma::MultiLogger).to receive(:info)
         allow(Fusuma::MultiLogger).to receive(:error)
+        remapper.send(:check_and_add_new_devices)
+        expect(remapper.instance_variable_get(:@source_keyboards)).not_to include(new_keyboard)
+      end
+    end
+
+    context "when device is removed during grab (ENODEV)" do
+      before do
+        selector = instance_double(described_class::KeyboardSelector)
+        allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+        allow(selector).to receive(:try_open_devices).and_return([new_keyboard])
+        allow(remapper).to receive(:wait_release_all_keys).and_raise(Errno::ENODEV)
+      end
+
+      it "logs warning and continues" do
+        expect(Fusuma::MultiLogger).to receive(:info).with(/New keyboard\(s\) detected/)
+        expect(Fusuma::MultiLogger).to receive(:warn).with(/Device removed during grab/)
+        remapper.send(:check_and_add_new_devices)
+      end
+
+      it "does not add device that was removed" do
+        allow(Fusuma::MultiLogger).to receive(:info)
+        allow(Fusuma::MultiLogger).to receive(:warn)
         remapper.send(:check_and_add_new_devices)
         expect(remapper.instance_variable_get(:@source_keyboards)).not_to include(new_keyboard)
       end

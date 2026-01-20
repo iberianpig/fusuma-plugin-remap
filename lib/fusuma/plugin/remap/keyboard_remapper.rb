@@ -259,13 +259,13 @@ module Fusuma
           grabbed_devices = []
           new_devices.each do |device|
             wait_release_all_keys(device)
-            begin
-              device.grab
-              MultiLogger.info "Grabbed keyboard: #{device.device_name}"
-              grabbed_devices << device
-            rescue Errno::EBUSY
-              MultiLogger.error "Failed to grab keyboard: #{device.device_name}"
-            end
+            device.grab
+            MultiLogger.info "Grabbed keyboard: #{device.device_name}"
+            grabbed_devices << device
+          rescue Errno::EBUSY
+            MultiLogger.error "Failed to grab keyboard: #{device.device_name}"
+          rescue Errno::ENODEV
+            MultiLogger.warn "Device removed during grab: #{device.device_name}"
           end
 
           return if grabbed_devices.empty?
@@ -684,7 +684,7 @@ module Fusuma
 
             devices.filter_map do |d|
               Revdev::EventDevice.new("/dev/input/#{d.id}")
-            rescue Errno::ENOENT, Errno::ENODEV => e
+            rescue Errno::ENOENT, Errno::ENODEV, Errno::EACCES => e
               MultiLogger.warn "Failed to open #{d.name} (/dev/input/#{d.id}): #{e.message}"
               nil
             end
