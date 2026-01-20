@@ -564,6 +564,154 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
   end
 
+  describe "#separate_mappings" do
+    # simple_remap: key-to-key without "+"
+    # combo_remap: contains "+", Array, or Hash
+
+    context "with simple remaps only" do
+      let(:mapping) { {CAPSLOCK: "LEFTCTRL", LEFTALT: "LEFTMETA"} }
+
+      it "classifies all as simple_remap" do
+        simple, combo = remapper.send(:separate_mappings, mapping)
+        expect(simple).to eq({CAPSLOCK: "LEFTCTRL", LEFTALT: "LEFTMETA"})
+        expect(combo).to eq({})
+      end
+    end
+
+    context "with combo remaps only" do
+      let(:mapping) { {"LEFTCTRL+A": "HOME", "LEFTALT+N": "LEFTCTRL+TAB"} }
+
+      it "classifies all as combo_remap" do
+        simple, combo = remapper.send(:separate_mappings, mapping)
+        expect(simple).to eq({})
+        expect(combo).to eq({"LEFTCTRL+A": "HOME", "LEFTALT+N": "LEFTCTRL+TAB"})
+      end
+    end
+
+    context "with mixed remaps" do
+      let(:mapping) do
+        {
+          CAPSLOCK: "LEFTCTRL",           # simple: key-to-key
+          LEFTALT: "LEFTMETA",            # simple: key-to-key
+          "LEFTCTRL+A": "HOME",           # combo: key contains +
+          A: "LEFTCTRL+B",                # combo: value contains +
+          "LEFTCTRL+U": ["HOME", "DELETE"], # combo: value is Array
+          X: {command: "echo foo"}        # combo: value is Hash
+        }
+      end
+
+      it "classifies correctly" do
+        simple, combo = remapper.send(:separate_mappings, mapping)
+
+        expect(simple).to eq({CAPSLOCK: "LEFTCTRL", LEFTALT: "LEFTMETA"})
+        expect(combo).to eq({
+          "LEFTCTRL+A": "HOME",
+          A: "LEFTCTRL+B",
+          "LEFTCTRL+U": ["HOME", "DELETE"],
+          X: {command: "echo foo"}
+        })
+      end
+    end
+
+    context "with key swap settings" do
+      let(:mapping) { {LEFTALT: "LEFTMETA", LEFTMETA: "LEFTALT"} }
+
+      it "classifies both as simple_remap (prevents double conversion)" do
+        simple, combo = remapper.send(:separate_mappings, mapping)
+        expect(simple).to eq({LEFTALT: "LEFTMETA", LEFTMETA: "LEFTALT"})
+        expect(combo).to eq({})
+      end
+    end
+  end
+
+  describe "key swap without double conversion" do
+    # Key swap: LEFTALT <-> LEFTMETA
+    # Problem: Using same mapping for apply_simple_remap and find_remapping causes double conversion
+    # Solution: separate_mappings splits into simple/combo, each method uses appropriate mapping
+
+    let(:mapping) { {LEFTALT: "LEFTMETA", LEFTMETA: "LEFTALT"} }
+
+    before do
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+    end
+
+    describe "using get_separated_mappings" do
+      it "physical LEFTALT -> LEFTMETA output (no double conversion)" do
+        simple, combo = remapper.send(:get_separated_mappings, mapping)
+
+        # simple_remap: LEFTALT -> LEFTMETA
+        effective_key = remapper.send(:apply_simple_remap, simple, "LEFTALT")
+        expect(effective_key).to eq("LEFTMETA")
+
+        # combo_remap: search LEFTMETA -> no match (no double conversion)
+        remapped, _is_modifier_remap = remapper.send(:find_remapping, combo, effective_key)
+        expect(remapped).to be_nil
+
+        # Final output is LEFTMETA
+        expect(effective_key).to eq("LEFTMETA")
+      end
+
+      it "physical LEFTMETA -> LEFTALT output (no double conversion)" do
+        simple, combo = remapper.send(:get_separated_mappings, mapping)
+
+        # simple_remap: LEFTMETA -> LEFTALT
+        effective_key = remapper.send(:apply_simple_remap, simple, "LEFTMETA")
+        expect(effective_key).to eq("LEFTALT")
+
+        # combo_remap: search LEFTALT -> no match (no double conversion)
+        remapped, _is_modifier_remap = remapper.send(:find_remapping, combo, effective_key)
+        expect(remapped).to be_nil
+
+        # Final output is LEFTALT
+        expect(effective_key).to eq("LEFTALT")
+      end
+    end
+
+    describe "old implementation issue (using same mapping)" do
+      it "physical LEFTALT -> double conversion reverts to LEFTALT (bug)" do
+        # apply_simple_remap: LEFTALT -> LEFTMETA
+        effective_key = remapper.send(:apply_simple_remap, mapping, "LEFTALT")
+        expect(effective_key).to eq("LEFTMETA")
+
+        # find_remapping: LEFTMETA -> LEFTALT (double conversion!)
+        remapped, _is_modifier_remap = remapper.send(:find_remapping, mapping, effective_key)
+        expect(remapped).to eq("LEFTALT") # Bug: reverts to original
+      end
+    end
+
+    describe "combo remap after key swap" do
+      # Requirement: After LEFTALT <-> LEFTMETA swap on HHKB
+      # Physical LEFTMETA+N -> LEFTALT+N (internal) -> LEFTCTRL+TAB output
+      let(:combined_mapping) do
+        {
+          LEFTALT: "LEFTMETA",
+          LEFTMETA: "LEFTALT",
+          "LEFTALT+N": "LEFTCTRL+TAB"
+        }
+      end
+
+      it "physical LEFTMETA+N -> LEFTCTRL+TAB (combo after swap)" do
+        simple, combo = remapper.send(:get_separated_mappings, combined_mapping)
+
+        # 1. Physical LEFTMETA press -> simple_remap to LEFTALT
+        effective_meta = remapper.send(:apply_simple_remap, simple, "LEFTMETA")
+        expect(effective_meta).to eq("LEFTALT")
+
+        # 2. Register LEFTALT in modifier_state
+        remapper.instance_variable_get(:@modifier_state).update(effective_meta, 1)
+
+        # 3. Physical N press
+        effective_n = remapper.send(:apply_simple_remap, simple, "N")
+        expect(effective_n).to eq("N")
+
+        # 4. find_remapping searches LEFTALT+N -> LEFTCTRL+TAB
+        remapped, is_modifier_remap = remapper.send(:find_remapping, combo, effective_n)
+        expect(remapped).to eq("LEFTCTRL+TAB")
+        expect(is_modifier_remap).to be true
+      end
+    end
+  end
+
   describe "#apply_simple_remap" do
     before do
       remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
