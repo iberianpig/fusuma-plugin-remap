@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.13.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.13.0) (2026-01-20)
+
+[Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.12.0...v0.13.0)
+
+**Implemented enhancements:**
+
+- feat: add device-specific keyboard remapping [\#10](https://github.com/iberianpig/fusuma-plugin-remap/pull/10) ([iberianpig](https://github.com/iberianpig))
+- feat: add modifier key remapping, output sequences, and layer merge support [\#9](https://github.com/iberianpig/fusuma-plugin-remap/pull/9) ([iberianpig](https://github.com/iberianpig))
+
 ## [v0.12.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.12.0) (2026-01-09)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.11.2...v0.12.0)
