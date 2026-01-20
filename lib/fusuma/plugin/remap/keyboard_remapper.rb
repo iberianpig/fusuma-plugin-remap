@@ -78,8 +78,9 @@ module Fusuma
                 next
               end
 
-              # Clear device mapping cache when layer changes
+              # Clear mapping caches when layer changes
               @device_mappings = {}
+              @separated_mappings_cache = {}
               @layer_changed = true
               next
             end
@@ -99,11 +100,15 @@ module Fusuma
             # Use device-specific mapping (wait during layer change to prevent key stuck)
             current_mapping = @layer_changed ? current_mapping : device_mapping
 
+            # Separate mapping into simple remap and combo remap
+            # This prevents double conversion in key swap scenarios (e.g., LEFTALT <-> LEFTMETA)
+            simple_mapping, combo_mapping = get_separated_mappings(current_mapping)
+
             input_key = code_to_key(input_event.code)
 
             # Apply simple key-to-key remapping first (modmap-style)
             # e.g., CAPSLOCK -> LEFTCTRL, so modifier state tracks the remapped key
-            effective_key = apply_simple_remap(current_mapping, input_key)
+            effective_key = apply_simple_remap(simple_mapping, input_key)
 
             if input_event.type == EV_KEY
               @emergency_stop.call(old_ie, input_event)
@@ -124,7 +129,7 @@ module Fusuma
               end
             end
 
-            remapped, is_modifier_remap = find_remapping(current_mapping, effective_key)
+            remapped, is_modifier_remap = find_remapping(combo_mapping, effective_key)
             case remapped
             when String, Symbol
               # Continue to key output processing below
@@ -201,6 +206,7 @@ module Fusuma
           rescue Errno::ENODEV => e # device is removed
             MultiLogger.error "Device is removed: #{e.message}"
             @device_mappings = {} # Clear cache for new device configuration
+            @separated_mappings_cache = {}
             @source_keyboards = reload_keyboards
           end
         rescue EOFError => e # device is closed
@@ -272,6 +278,7 @@ module Fusuma
 
           @source_keyboards.concat(grabbed_devices)
           @device_mappings = {} # Clear cache for new device configuration
+          @separated_mappings_cache = {}
         end
 
         def uinput_keyboard
@@ -491,6 +498,46 @@ module Fusuma
               end
             end
           end
+        end
+
+        # Separate mapping into "simple remap" and "combo remap"
+        # This prevents double conversion in key swap scenarios (e.g., LEFTALT <-> LEFTMETA)
+        #
+        # Classification rules:
+        # - simple_remap: key doesn't contain "+", value is String/Symbol without "+"
+        #   e.g., CAPSLOCK: "LEFTCTRL", LEFTALT: "LEFTMETA"
+        #
+        # - combo_remap: key contains "+" OR value is Array/Hash OR value contains "+"
+        #   e.g., "LEFTCTRL+A": "HOME", A: ["B", "C"], X: { command: "echo" }
+        #
+        # @param mapping [Hash] original mapping
+        # @return [Array<Hash, Hash>] [simple_remap, combo_remap]
+        def separate_mappings(mapping)
+          simple_remap = {}
+          combo_remap = {}
+
+          mapping.each do |key, value|
+            key_str = key.to_s
+            value_str = value.to_s if value.is_a?(String) || value.is_a?(Symbol)
+
+            if key_str.include?("+")
+              combo_remap[key] = value
+            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+")
+              combo_remap[key] = value
+            else
+              simple_remap[key] = value
+            end
+          end
+
+          [simple_remap, combo_remap]
+        end
+
+        # Get separated mappings from cache or separate and cache
+        # @param mapping [Hash] original mapping
+        # @return [Array<Hash, Hash>] [simple_remap, combo_remap]
+        def get_separated_mappings(mapping)
+          @separated_mappings_cache ||= {}
+          @separated_mappings_cache[mapping.hash] ||= separate_mappings(mapping)
         end
 
         # Apply simple key-to-key remapping (modmap-style)
