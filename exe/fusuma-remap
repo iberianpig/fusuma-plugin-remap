@@ -6,10 +6,16 @@ require_relative "../lib/fusuma/plugin/inputs/remap_keyboard_input"
 require_relative "../lib/fusuma/plugin/remap/version"
 require_relative "../lib/fusuma/plugin/remap/keyboard_remapper"
 require_relative "../lib/fusuma/plugin/remap/layer_manager"
+require_relative "../lib/fusuma/plugin/remap/device_selector"
 require "fusuma/config"
 require "fusuma/multi_logger"
 require "msgpack"
 require "irb"
+
+if ARGV.include?("--version") || ARGV.include?("-v")
+  puts "fusuma-remap #{Fusuma::Plugin::Remap::VERSION}"
+  exit 0
+end
 
 Fusuma::MultiLogger.instance.debug_mode = true
 Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
@@ -23,8 +29,8 @@ end
 keyboard_name_pattern ||= ARGV.shift || ["keyboard", "Keyboard", "KEYBOARD"]
 touchpad_name_pattern ||= ARGV.shift || ["touchpad", "Touchpad", "TOUCHPAD"]
 
-source_keyboards = Fusuma::Plugin::Inputs::RemapKeyboardInput::KeyboardSelector.new(keyboard_name_pattern).select
-internal_touchpad = Fusuma::Plugin::Inputs::RemapKeyboardInput::TouchpadSelector.new(touchpad_name_pattern).select.first
+source_keyboards = Fusuma::Plugin::Remap::DeviceSelector.new(name_patterns: keyboard_name_pattern, device_type: :keyboard).select(wait: true)
+internal_touchpad = Fusuma::Plugin::Remap::DeviceSelector.new(name_patterns: touchpad_name_pattern, device_type: :touchpad).select(wait: true).first
 
 if source_keyboards.empty?
   warn "no keyboard found"

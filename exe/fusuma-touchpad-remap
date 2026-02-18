@@ -6,11 +6,17 @@ require_relative "../lib/fusuma/plugin/inputs/remap_touchpad_input"
 require_relative "../lib/fusuma/plugin/remap/version"
 require_relative "../lib/fusuma/plugin/remap/touchpad_remapper"
 require_relative "../lib/fusuma/plugin/remap/layer_manager"
+require_relative "../lib/fusuma/plugin/remap/device_selector"
 require "fusuma/config"
 require "fusuma/multi_logger"
 require "revdev"
 require "msgpack"
 require "irb"
+
+if ARGV.include?("--version") || ARGV.include?("-v")
+  puts "fusuma-touchpad-remap #{Fusuma::Plugin::Remap::VERSION}"
+  exit 0
+end
 
 Fusuma::MultiLogger.instance.debug_mode = true
 Fusuma::Config.instance.custom_path = "~/.config/fusuma/config.yml"
@@ -19,7 +25,7 @@ touchpad_name_pattern = ["touchpad", "Touchpad", "TOUCHPAD"]
 
 # $DEBUG=true # puts events
 
-internal_touchpad = Fusuma::Plugin::Inputs::RemapKeyboardInput::TouchpadSelector.new(touchpad_name_pattern).select.first
+internal_touchpad = Fusuma::Plugin::Remap::DeviceSelector.new(name_patterns: touchpad_name_pattern, device_type: :touchpad).select(wait: true).first
 
 if internal_touchpad.nil?
   warn "no touchpad found"
