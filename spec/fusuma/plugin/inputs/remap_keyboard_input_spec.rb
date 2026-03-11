@@ -21,7 +21,7 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapKeyboardInput do
     let(:instance) { described_class.new }
 
     context "with valid record" do
-      let(:record) { MessagePack.pack({"key" => "J", "status" => 1}) }
+      let(:record) { {"key" => "J", "status" => 1}.to_json + "\n" }
 
       it "returns an Event" do
         expect(instance.create_event(record: record)).to be_a_kind_of(Fusuma::Plugin::Events::Event)

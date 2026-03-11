@@ -1,5 +1,5 @@
 require "revdev"
-require "msgpack"
+require "json"
 require "set"
 require_relative "layer_manager"
 require_relative "uinput_keyboard"
@@ -129,7 +129,7 @@ module Fusuma
               if input_event.value != 2 # repeat
                 data = {key: input_key, status: input_event.value, layer: layer}
                 begin
-                  @fusuma_writer.write(data.to_msgpack)
+                  @fusuma_writer.puts(data.to_json)
                 rescue IOError => e
                   MultiLogger.error("Failed to write to fusuma_writer: #{e.message}")
                   @destroy&.call(1)

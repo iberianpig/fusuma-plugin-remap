@@ -1,5 +1,5 @@
 require "revdev"
-require "msgpack"
+require "json"
 require "set"
 
 require_relative "uinput_touchpad"
@@ -157,7 +157,7 @@ module Fusuma
                 finger: finger_state,
                 status: status
               }
-              @fusuma_writer.write(data.to_msgpack)
+              @fusuma_writer.puts(data.to_json)
               prev_status = status
               prev_valid_touch = valid_touch
             end

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require_relative "../remap/keyboard_remapper"
 require_relative "../remap/layer_manager"
 
@@ -29,8 +30,10 @@ module Fusuma
         # override Input#read_from_io
         # @return [Record]
         def read_from_io
-          @unpacker ||= MessagePack::Unpacker.new(io)
-          data = @unpacker.unpack
+          line = io.gets
+          raise EOFError, "pipe closed" unless line
+
+          data = JSON.parse(line)
 
           raise "data is not Hash : #{data}" unless data.is_a? Hash
 
