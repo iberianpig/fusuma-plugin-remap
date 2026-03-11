@@ -111,8 +111,7 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
 
     context "with valid gesture record" do
       before do
-        data = {"finger" => 2, "status" => "begin"}.to_msgpack
-        fusuma_reader.write(data)
+        fusuma_reader.puts({"finger" => 2, "status" => "begin"}.to_json)
         fusuma_reader.rewind
       end
 

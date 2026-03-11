@@ -1,5 +1,5 @@
 require "fusuma/config"
-require "msgpack"
+require "json"
 
 module Fusuma
   module Plugin
@@ -33,7 +33,7 @@ module Fusuma
 
           @last_layer = layer
           @last_remove = remove
-          @writer.write({layer: layer, remove: remove}.to_msgpack)
+          @writer.puts({layer: layer, remove: remove}.to_json)
         end
 
         # Read layer from pipe and update @current_layer
@@ -44,9 +44,10 @@ module Fusuma
         #  receive_layer
         #  # => { thumbsense: true, application: "Google-chrome" }
         def receive_layer
-          @layer_unpacker ||= MessagePack::Unpacker.new(@reader)
+          line = @reader.gets
+          return unless line
 
-          data = @layer_unpacker.unpack
+          data = JSON.parse(line)
 
           return unless data.is_a? Hash
 
