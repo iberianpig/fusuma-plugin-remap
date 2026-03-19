@@ -81,26 +81,6 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       end
     end
 
-    describe "#should_use_original_key?" do
-      it "returns false for press events" do
-        expect(remapper.send(:should_use_original_key?, "A", 1)).to be false
-      end
-
-      it "returns false for repeat events" do
-        expect(remapper.send(:should_use_original_key?, "A", 2)).to be false
-      end
-
-      it "returns false for release events of pressed keys" do
-        remapper.send(:update_virtual_key_state, "A", 1) # press first
-        expect(remapper.send(:should_use_original_key?, "A", 0)).to be false
-      end
-
-      it "returns true for release events of unpressed keys" do
-        # Key was not pressed in virtual state (pressed before remapping started)
-        expect(remapper.send(:should_use_original_key?, "A", 0)).to be true
-      end
-    end
-
     describe "#virtual_keyboard_all_key_released?" do
       it "returns true when no keys are pressed" do
         expect(remapper.send(:virtual_keyboard_all_key_released?)).to be true
@@ -903,6 +883,134 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
   end
 
+  describe "#get_or_record_key_code" do
+    # Records physical-to-output key code mapping on press,
+    # returns recorded code on release to ensure press/release consistency.
+    # This fixes the bug where layer changes cause mismatched press/release events
+    # (e.g., F pressed as passthrough, released as BTN_LEFT → F stuck in pressed state)
+
+    let(:key_f_code) { 33 }      # KEY_F
+    let(:btn_left_code) { 272 }  # BTN_LEFT
+
+    describe "press event" do
+      it "returns output_code on press" do
+        result = remapper.send(:get_or_record_key_code, key_f_code, key_f_code, 1)
+        expect(result).to eq(key_f_code)
+      end
+
+      it "records the mapping for later release" do
+        remapper.send(:get_or_record_key_code, key_f_code, key_f_code, 1)
+        result = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        expect(result).to eq(key_f_code)
+      end
+    end
+
+    describe "release event" do
+      it "returns recorded code on release (not the new output_code)" do
+        remapper.send(:get_or_record_key_code, key_f_code, key_f_code, 1)
+        result = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        expect(result).to eq(key_f_code)
+      end
+
+      it "returns output_code if no recorded mapping exists" do
+        result = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        expect(result).to eq(btn_left_code)
+      end
+
+      it "removes the mapping after release" do
+        remapper.send(:get_or_record_key_code, key_f_code, key_f_code, 1)
+        remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        result = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        expect(result).to eq(btn_left_code)
+      end
+    end
+
+    describe "repeat event" do
+      it "returns output_code on repeat without affecting recording" do
+        remapper.send(:get_or_record_key_code, key_f_code, key_f_code, 1)
+        result = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 2)
+        expect(result).to eq(btn_left_code)
+        release_result = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        expect(release_result).to eq(key_f_code)
+      end
+    end
+
+    describe "layer change consistency" do
+      it "maintains press/release consistency across layer changes" do
+        # Scenario: F pressed as passthrough, then layer changes, F released as BTN_LEFT
+        # Expected: release should use the recorded code (F), not the new mapping (BTN_LEFT)
+        press_output = remapper.send(:get_or_record_key_code, key_f_code, key_f_code, 1)
+        expect(press_output).to eq(key_f_code)
+
+        # Layer changes here (thumbsense ON) - mapping would change F -> BTN_LEFT
+
+        release_output = remapper.send(:get_or_record_key_code, key_f_code, btn_left_code, 0)
+        expect(release_output).to eq(key_f_code)
+      end
+    end
+  end
+
+  describe "#get_or_record_key_name" do
+    # Records physical-to-key-name mapping on press,
+    # returns recorded name on release to ensure update_virtual_key_state consistency.
+    # This fixes the bug where layer changes cause pressed_virtual_keys to never be cleared
+    # (e.g., combo remap A->B on press, layer changes, release tries to delete C instead of B)
+
+    let(:key_f_code) { 33 }
+
+    describe "press event" do
+      it "returns key_name on press" do
+        result = remapper.send(:get_or_record_key_name, key_f_code, "KEY_F", 1)
+        expect(result).to eq("KEY_F")
+      end
+    end
+
+    describe "release event" do
+      it "returns recorded name on release (not the new key_name)" do
+        remapper.send(:get_or_record_key_name, key_f_code, "KEY_F", 1)
+        result = remapper.send(:get_or_record_key_name, key_f_code, "BTN_LEFT", 0)
+        expect(result).to eq("KEY_F")
+      end
+
+      it "returns key_name if no recorded mapping exists" do
+        result = remapper.send(:get_or_record_key_name, key_f_code, "BTN_LEFT", 0)
+        expect(result).to eq("BTN_LEFT")
+      end
+    end
+
+    describe "repeat event" do
+      it "returns key_name on repeat without affecting recording" do
+        remapper.send(:get_or_record_key_name, key_f_code, "KEY_F", 1)
+        result = remapper.send(:get_or_record_key_name, key_f_code, "BTN_LEFT", 2)
+        expect(result).to eq("BTN_LEFT")
+        release_result = remapper.send(:get_or_record_key_name, key_f_code, "BTN_LEFT", 0)
+        expect(release_result).to eq("KEY_F")
+      end
+    end
+
+    describe "layer change: pressed_virtual_keys consistency" do
+      it "ensures pressed_virtual_keys is correctly cleaned up across layer changes" do
+        # Scenario: combo remap A->B on press, layer changes, A->C on release
+        # Without get_or_record_key_name: update_virtual_key_state("C", 0) → "B" stuck!
+        # With get_or_record_key_name: update_virtual_key_state("B", 0) → correct cleanup
+
+        # Press: record "B" as virtual key name
+        virtual_key = remapper.send(:get_or_record_key_name, key_f_code, "B", 1)
+        remapper.send(:update_virtual_key_state, virtual_key, 1)
+        expect(remapper.send(:pressed_virtual_keys)).to include("B")
+
+        # Layer changes here — new layer would map to "C"
+
+        # Release: get_or_record_key_name returns recorded "B", not new "C"
+        virtual_key = remapper.send(:get_or_record_key_name, key_f_code, "C", 0)
+        remapper.send(:update_virtual_key_state, virtual_key, 0)
+
+        expect(remapper.send(:pressed_virtual_keys)).to be_empty
+        expect(remapper.send(:virtual_keyboard_all_key_released?)).to be true
+      end
+    end
+  end
+
   describe "#check_and_add_new_devices" do
     let(:config) { {keyboard_name_patterns: ["HHKB", "keyboard"]} }
     let(:existing_keyboard) { double("existing_keyboard", file: double("file", path: "/dev/input/event1")) }
@@ -1009,6 +1117,111 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         allow(Fusuma::MultiLogger).to receive(:warn)
         remapper.send(:check_and_add_new_devices)
         expect(remapper.instance_variable_get(:@source_keyboards)).not_to include(new_keyboard)
+      end
+    end
+  end
+
+  # Combo mapping during layer change
+  # Problem: When switching apps while holding a modifier key,
+  #          the new layer's combo mappings are not applied
+  # Expected: Combo mappings should immediately use the new layer's mapping
+  describe "combo mapping during layer change" do
+    # Scenario:
+    # 1. Old layer (Gnome-terminal): No LEFTALT+P mapping
+    # 2. User switches app while holding LEFTALT
+    # 3. New layer (Google-chrome): LEFTALT+P -> LEFTCTRL+LEFTSHIFT+TAB
+    # 4. User presses P while still holding LEFTALT
+    # Expected: New layer's LEFTALT+P remap should be applied
+    #
+    # Solution:
+    # - simple_mapping: from current_mapping (prevents key stuck)
+    # - combo_mapping: from device_mapping (immediately applies new layer)
+
+    let(:old_layer_mapping) { {LEFTMETA: "LEFTALT"} }
+    let(:new_layer_mapping) { {LEFTMETA: "LEFTALT", "LEFTALT+P": "LEFTCTRL+LEFTSHIFT+TAB"} }
+
+    before do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      remapper.instance_variable_set(:@modifier_state, Fusuma::Plugin::Remap::ModifierState.new)
+      allow(uinput_keyboard).to receive(:write_input_event)
+    end
+
+    context "when layer changes while modifier key is pressed" do
+      it "combo_mapping should use new layer (device_mapping) while simple_mapping uses old layer" do
+        old_simple, old_combo = remapper.send(:get_separated_mappings, old_layer_mapping)
+
+        # Old layer has LEFTMETA -> LEFTALT simple remap
+        expect(old_simple).to eq({LEFTMETA: "LEFTALT"})
+        # Old layer has no LEFTALT+P combo remap
+        expect(old_combo).to eq({})
+
+        new_simple, new_combo = remapper.send(:get_separated_mappings, new_layer_mapping)
+
+        # Simple remap is same
+        expect(new_simple).to eq({LEFTMETA: "LEFTALT"})
+        # New layer has LEFTALT+P combo remap
+        expect(new_combo).to eq({"LEFTALT+P": "LEFTCTRL+LEFTSHIFT+TAB"})
+      end
+    end
+
+    context "when searching for combo remap during layer change" do
+      before do
+        # Simulate LEFTALT being pressed
+        remapper.instance_variable_get(:@modifier_state).update("LEFTALT", 1)
+      end
+
+      it "finds LEFTALT+P remap in new layer's combo_mapping" do
+        _, new_combo = remapper.send(:get_separated_mappings, new_layer_mapping)
+
+        remapped, is_modifier_remap = remapper.send(:find_remapping, new_combo, "P")
+
+        expect(remapped).to eq("LEFTCTRL+LEFTSHIFT+TAB")
+        expect(is_modifier_remap).to be true
+      end
+
+      it "does NOT find LEFTALT+P remap in old layer's combo_mapping" do
+        _, old_combo = remapper.send(:get_separated_mappings, old_layer_mapping)
+
+        remapped, _is_modifier_remap = remapper.send(:find_remapping, old_combo, "P")
+
+        expect(remapped).to be_nil
+      end
+    end
+
+    context "simulating run loop during layer change" do
+      before do
+        # Simulate LEFTALT being pressed in modifier state
+        remapper.instance_variable_get(:@modifier_state).update("LEFTALT", 1)
+        # Simulate LEFTALT being pressed in virtual keyboard
+        remapper.send(:update_virtual_key_state, "LEFTALT", 1)
+      end
+
+      it "uses new layer's combo_mapping even when layer_changed is true" do
+        # Simulate run loop:
+        # 1. current_mapping = old mapping (due to @layer_changed = true)
+        # 2. device_mapping = new mapping
+        current_mapping = old_layer_mapping
+        device_mapping = new_layer_mapping
+
+        # Virtual keys not released, so @layer_changed remains true
+        all_keys_released = remapper.send(:virtual_keyboard_all_key_released?)
+        expect(all_keys_released).to be false
+
+        # Use get_simple_and_combo_mappings helper method:
+        # - simple_mapping: from current_mapping (prevents key stuck)
+        # - combo_mapping: from device_mapping (immediately applies new layer)
+        simple_mapping, combo_mapping = remapper.send(
+          :get_simple_and_combo_mappings,
+          current_mapping,
+          device_mapping
+        )
+
+        effective_key = remapper.send(:apply_simple_remap, simple_mapping, "P")
+        remapped, is_modifier_remap = remapper.send(:find_remapping, combo_mapping, effective_key)
+
+        # Expected: new layer's LEFTALT+P remap is found
+        expect(remapped).to eq("LEFTCTRL+LEFTSHIFT+TAB")
+        expect(is_modifier_remap).to be true
       end
     end
   end

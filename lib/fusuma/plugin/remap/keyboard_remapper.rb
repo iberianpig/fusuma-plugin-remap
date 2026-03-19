@@ -109,8 +109,9 @@ module Fusuma
             current_mapping = @layer_changed ? current_mapping : device_mapping
 
             # Separate mapping into simple remap and combo remap
-            # This prevents double conversion in key swap scenarios (e.g., LEFTALT <-> LEFTMETA)
-            simple_mapping, combo_mapping = get_separated_mappings(current_mapping)
+            # - simple_mapping: from current_mapping (prevents key stuck during layer change)
+            # - combo_mapping: from device_mapping (immediately applies new layer's combos)
+            simple_mapping, combo_mapping = get_simple_and_combo_mappings(current_mapping, device_mapping)
 
             input_key = code_to_key(input_event.code)
 
@@ -156,14 +157,20 @@ module Fusuma
                 # Output simple-remapped key (e.g., CAPSLOCK -> LEFTCTRL)
                 remapped_code = key_to_code(effective_key)
                 if remapped_code
-                  remapped_event = InputEvent.new(nil, input_event.type, remapped_code, input_event.value)
-                  update_virtual_key_state(effective_key, remapped_event.value)
+                  # Record key code on press / use recorded code on release
+                  output_code = get_or_record_key_code(input_event.code, remapped_code, input_event.value)
+                  remapped_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
+                  virtual_key = get_or_record_key_name(input_event.code, effective_key, input_event.value)
+                  update_virtual_key_state(virtual_key, remapped_event.value)
                   write_event_with_log(remapped_event, context: "simple remap from #{input_key}")
                 else
                   write_event_with_log(input_event, context: "simple remap failed")
                 end
               else
-                write_event_with_log(input_event, context: "passthrough")
+                # Passthrough: record key code to ensure press/release consistency
+                output_code = get_or_record_key_code(input_event.code, input_event.code, input_event.value)
+                passthrough_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
+                write_event_with_log(passthrough_event, context: "passthrough")
               end
               next
             else
@@ -194,16 +201,11 @@ module Fusuma
               next
             end
 
-            remapped_event = InputEvent.new(nil, input_event.type, remapped_code, input_event.value)
-
-            # Workaround: If a key was pressed before remapping started and is being released,
-            # use the original key code to ensure proper key release
-            if should_use_original_key?(remapped, remapped_event.value)
-              remapped_event.code = input_event.code
-            else
-              # Only update virtual key state if we're using the remapped key
-              update_virtual_key_state(remapped, remapped_event.value)
-            end
+            # Record key code on press / use recorded code on release
+            output_code = get_or_record_key_code(input_event.code, remapped_code, input_event.value)
+            remapped_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
+            virtual_key = get_or_record_key_name(input_event.code, remapped, input_event.value)
+            update_virtual_key_state(virtual_key, remapped_event.value)
 
             # remap to command will be nil
             # e.g) remap: { X: { command: echo 'foo' } }
@@ -215,6 +217,8 @@ module Fusuma
             MultiLogger.error "Device is removed: #{e.message}"
             @device_mappings = {} # Clear cache for new device configuration
             @separated_mappings_cache = {}
+            @pressed_key_codes = {}
+            @pressed_key_names = {}
             @source_keyboards = reload_keyboards
           end
         rescue EOFError => e # device is closed
@@ -297,6 +301,52 @@ module Fusuma
           @pressed_virtual_keys ||= Set.new
         end
 
+        def pressed_key_codes
+          @pressed_key_codes ||= {}
+        end
+
+        def pressed_key_names
+          @pressed_key_names ||= {}
+        end
+
+        # Record key name on press and return recorded name on release
+        # This ensures update_virtual_key_state uses consistent key names across layer changes
+        # @param physical_code [Integer] Physical key code from input device
+        # @param key_name [String] Key name to record (may differ due to remapping)
+        # @param event_value [Integer] Event value (0: release, 1: press, 2: repeat)
+        # @return [String] Key name to use for update_virtual_key_state
+        def get_or_record_key_name(physical_code, key_name, event_value)
+          case event_value
+          when 1 # press
+            pressed_key_names[physical_code] = key_name
+            key_name
+          when 0 # release
+            recorded_name = pressed_key_names.delete(physical_code)
+            recorded_name || key_name
+          else # repeat
+            key_name
+          end
+        end
+
+        # Record key code on press and return recorded code on release
+        # This ensures press/release consistency across layer changes
+        # @param physical_code [Integer] Physical key code from input device
+        # @param output_code [Integer] Key code to output (may differ due to remapping)
+        # @param event_value [Integer] Event value (0: release, 1: press, 2: repeat)
+        # @return [Integer] Key code to actually output
+        def get_or_record_key_code(physical_code, output_code, event_value)
+          case event_value
+          when 1 # press
+            pressed_key_codes[physical_code] = output_code
+            output_code
+          when 0 # release
+            recorded_code = pressed_key_codes.delete(physical_code)
+            recorded_code || output_code
+          else # repeat
+            output_code
+          end
+        end
+
         # Update virtual keyboard key state
         # @param [String] remapped_value remapped key name
         # @param [Integer] event_value event value (0: release, 1: press, 2: repeat)
@@ -308,23 +358,6 @@ module Fusuma
           when 1 # key press
             pressed_virtual_keys.add(remapped_value)
             # when 2 is repeat - no state change needed
-          end
-        end
-
-        # Check if we should use the original key code instead of remapped key
-        # This handles the case where a key was pressed before remapping started
-        # and is released after remapping
-        # @param [String] remapped_value remapped key name
-        # @param [Integer] event_value event value (0: release, 1: press, 2: repeat)
-        # @return [Boolean] true if we should use original key code
-        def should_use_original_key?(remapped_value, event_value)
-          case event_value
-          when 0 # key release
-            # If the key was not in our pressed set, it means it was pressed
-            # before remapping started, so we should use original key
-            !pressed_virtual_keys.include?(remapped_value)
-          when 1, 2 # key press or repeat
-            false # Always use remapped key for press/repeat events
           end
         end
 
@@ -556,6 +589,19 @@ module Fusuma
         def get_separated_mappings(mapping)
           @separated_mappings_cache ||= {}
           @separated_mappings_cache[mapping.hash] ||= separate_mappings(mapping)
+        end
+
+        # Get simple and combo mappings during layer change
+        # - simple_mapping: from current_mapping (uses old mapping to prevent key stuck)
+        # - combo_mapping: from device_mapping (immediately applies new layer)
+        #
+        # @param current_mapping [Hash] current mapping (old mapping during layer change)
+        # @param device_mapping [Hash] device-specific mapping (always latest layer)
+        # @return [Array<Hash, Hash>] [simple_mapping, combo_mapping]
+        def get_simple_and_combo_mappings(current_mapping, device_mapping)
+          simple_mapping, _ = get_separated_mappings(current_mapping)
+          _, combo_mapping = get_separated_mappings(device_mapping)
+          [simple_mapping, combo_mapping]
         end
 
         # Apply simple key-to-key remapping (modmap-style)
