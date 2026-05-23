@@ -1109,6 +1109,29 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         expect { remapper.send(:reload_keyboards) }.not_to raise_error
       end
     end
+
+    context "when @source_keyboards is nil (first call at startup)" do
+      it "does not invoke ungrab_keyboards" do
+        expect(remapper).not_to receive(:ungrab_keyboards)
+        remapper.send(:reload_keyboards)
+      end
+    end
+
+    context "ordering between ungrab and grab" do
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard])
+      end
+
+      it "ungrabs old keyboards before grabbing new ones" do
+        call_order = []
+        allow(old_keyboard).to receive(:ungrab) { call_order << :ungrab_old }
+        allow(new_keyboard).to receive(:grab) { call_order << :grab_new }
+
+        remapper.send(:reload_keyboards)
+
+        expect(call_order).to eq([:ungrab_old, :grab_new])
+      end
+    end
   end
 
   describe "#check_and_add_new_devices" do
