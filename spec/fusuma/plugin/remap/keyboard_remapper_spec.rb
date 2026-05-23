@@ -1011,6 +1011,44 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     end
   end
 
+  describe "#reload_keyboards" do
+    let(:config) { {keyboard_name_patterns: ["HHKB", "keyboard"], emergency_ungrab_keys: "RIGHTCTRL+LEFTCTRL"} }
+    let(:old_keyboard) do
+      double("old_keyboard",
+        device_name: "AT Translated Set 2 keyboard",
+        ungrab: nil,
+        file: double("old_file", path: "/dev/input/event2", close: nil))
+    end
+    let(:new_keyboard) do
+      double("new_keyboard",
+        device_name: "AT Translated Set 2 keyboard",
+        grab: nil,
+        file: double("new_file", path: "/dev/input/event2"))
+    end
+
+    before do
+      selector = instance_double(described_class::KeyboardSelector)
+      allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+      allow(selector).to receive(:select).and_return([new_keyboard])
+      allow(remapper).to receive(:wait_release_all_keys).and_return(true)
+      allow(remapper).to receive(:set_trap)
+      allow(remapper).to receive(:set_emergency_ungrab_keys)
+      allow(Fusuma::MultiLogger).to receive(:info)
+      allow(Fusuma::MultiLogger).to receive(:error)
+    end
+
+    context "when @source_keyboards has existing keyboards" do
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard])
+      end
+
+      it "ungrabs old keyboards before grabbing new ones" do
+        expect(old_keyboard).to receive(:ungrab)
+        remapper.send(:reload_keyboards)
+      end
+    end
+  end
+
   describe "#check_and_add_new_devices" do
     let(:config) { {keyboard_name_patterns: ["HHKB", "keyboard"]} }
     let(:existing_keyboard) { double("existing_keyboard", file: double("file", path: "/dev/input/event1")) }
