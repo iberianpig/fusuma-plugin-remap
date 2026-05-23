@@ -1046,6 +1046,11 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         expect(old_keyboard).to receive(:ungrab)
         remapper.send(:reload_keyboards)
       end
+
+      it "closes the file descriptor of old keyboards" do
+        expect(old_keyboard.file).to receive(:close)
+        remapper.send(:reload_keyboards)
+      end
     end
   end
 

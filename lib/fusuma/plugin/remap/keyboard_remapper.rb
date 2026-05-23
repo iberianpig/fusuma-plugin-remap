@@ -251,6 +251,7 @@ module Fusuma
         def ungrab_keyboards(keyboards)
           keyboards.each do |kbd|
             kbd.ungrab
+            kbd.file.close
           end
         end
 
