@@ -1052,6 +1052,44 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         remapper.send(:reload_keyboards)
       end
     end
+
+    context "when ungrab raises Errno::EINVAL (already ungrabbed)" do
+      let(:other_keyboard) do
+        double("other_keyboard",
+          device_name: "HHKB",
+          ungrab: nil,
+          file: double("other_file", path: "/dev/input/event3", close: nil))
+      end
+
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard, other_keyboard])
+        allow(old_keyboard).to receive(:ungrab).and_raise(Errno::EINVAL)
+      end
+
+      it "swallows the error and keeps ungrabbing the rest" do
+        expect(other_keyboard).to receive(:ungrab)
+        expect { remapper.send(:reload_keyboards) }.not_to raise_error
+      end
+    end
+
+    context "when ungrab raises Errno::ENODEV (device removed)" do
+      let(:other_keyboard) do
+        double("other_keyboard",
+          device_name: "HHKB",
+          ungrab: nil,
+          file: double("other_file", path: "/dev/input/event3", close: nil))
+      end
+
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard, other_keyboard])
+        allow(old_keyboard).to receive(:ungrab).and_raise(Errno::ENODEV)
+      end
+
+      it "swallows the error and keeps ungrabbing the rest" do
+        expect(other_keyboard).to receive(:ungrab)
+        expect { remapper.send(:reload_keyboards) }.not_to raise_error
+      end
+    end
   end
 
   describe "#check_and_add_new_devices" do

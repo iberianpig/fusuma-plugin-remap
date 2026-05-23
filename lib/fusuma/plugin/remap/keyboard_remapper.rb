@@ -250,7 +250,11 @@ module Fusuma
         # device unresponsive until the fusuma process exits.
         def ungrab_keyboards(keyboards)
           keyboards.each do |kbd|
-            kbd.ungrab
+            begin
+              kbd.ungrab
+            rescue Errno::EINVAL, Errno::ENODEV
+              # already ungrabbed or device removed
+            end
             kbd.file.close
           end
         end
