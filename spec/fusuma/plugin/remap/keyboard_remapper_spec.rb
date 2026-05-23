@@ -1090,6 +1090,25 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         expect { remapper.send(:reload_keyboards) }.not_to raise_error
       end
     end
+
+    context "when file.close raises IOError (already closed)" do
+      let(:other_keyboard) do
+        double("other_keyboard",
+          device_name: "HHKB",
+          ungrab: nil,
+          file: double("other_file", path: "/dev/input/event3", close: nil))
+      end
+
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard, other_keyboard])
+        allow(old_keyboard.file).to receive(:close).and_raise(IOError)
+      end
+
+      it "swallows the error and keeps closing the rest" do
+        expect(other_keyboard.file).to receive(:close)
+        expect { remapper.send(:reload_keyboards) }.not_to raise_error
+      end
+    end
   end
 
   describe "#check_and_add_new_devices" do

@@ -255,7 +255,11 @@ module Fusuma
             rescue Errno::EINVAL, Errno::ENODEV
               # already ungrabbed or device removed
             end
-            kbd.file.close
+            begin
+              kbd.file.close
+            rescue IOError
+              # already closed
+            end
           end
         end
 
