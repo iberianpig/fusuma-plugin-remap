@@ -14,6 +14,7 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
     )
   end
   let(:source_touchpads) { [source_touchpad] }
+  let(:input_event) { Revdev::InputEvent.new(nil, Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 100) }
 
   describe "#initialize" do
     context "without touchpad_name_patterns" do
@@ -73,6 +74,129 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
         source_touchpads: source_touchpads
       )
       expect(remapper.instance_variable_get(:@palm_detectors).keys).to eq(source_touchpads)
+    end
+
+    it "does not grab touchpads by default" do
+      expect(source_touchpad).not_to receive(:grab)
+
+      described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads
+      )
+    end
+
+    context "with pointer scroll forwarding enabled" do
+      let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel", reader: double("reader")) }
+      let(:uinput_factory) { -> { double("UinputTouchpad", create_from_device: nil, destroy: nil, write_input_event: nil) } }
+      let(:emulator_factory) { ->(device) { double("TwoFingerScrollEmulator", device: device) } }
+
+      before do
+        allow(source_touchpad).to receive(:grab)
+      end
+
+      it "grabs source touchpads" do
+        expect(source_touchpad).to receive(:grab)
+
+        described_class.new(
+          fusuma_writer: fusuma_writer,
+          source_touchpads: source_touchpads,
+          pointer_scroll_enabled: true,
+          scroll_channel: scroll_channel,
+          uinput_factory: uinput_factory,
+          emulator_factory: emulator_factory
+        )
+      end
+
+      it "falls back to disabled forwarding when grab fails" do
+        allow(source_touchpad).to receive(:grab).and_raise(Errno::EBUSY)
+        expect(Fusuma::MultiLogger).to receive(:warn).with(/Failed to grab touchpad/)
+
+        remapper = described_class.new(
+          fusuma_writer: fusuma_writer,
+          source_touchpads: source_touchpads,
+          pointer_scroll_enabled: true,
+          scroll_channel: scroll_channel,
+          uinput_factory: uinput_factory,
+          emulator_factory: emulator_factory
+        )
+
+        expect(remapper.send(:pointer_scroll_enabled?)).to be false
+      end
+    end
+  end
+
+  describe "pointer scroll forwarding helpers" do
+    let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel", reader: double("reader"), receive: true) }
+    let(:uinput) { double("UinputTouchpad", create_from_device: nil, destroy: nil, write_input_event: nil) }
+    let(:emulator) { double("TwoFingerScrollEmulator") }
+    let(:uinput_factory) { -> { uinput } }
+    let(:emulator_factory) { ->(_device) { emulator } }
+
+    before do
+      allow(source_touchpad).to receive(:grab)
+    end
+
+    it "creates one virtual touchpad per source when forwarding is enabled" do
+      second_touchpad = instance_double(
+        "Revdev::EventDevice",
+        file: instance_double("File"),
+        absinfo_for_axis: absinfo
+      )
+      allow(second_touchpad).to receive(:grab)
+      uinput1 = double("UinputTouchpad1", create_from_device: nil)
+      uinput2 = double("UinputTouchpad2", create_from_device: nil)
+      factory_calls = [uinput1, uinput2]
+      remapper = described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: [source_touchpad, second_touchpad],
+        pointer_scroll_enabled: true,
+        scroll_channel: scroll_channel,
+        uinput_factory: -> { factory_calls.shift },
+        emulator_factory: emulator_factory
+      )
+
+      remapper.send(:create_virtual_touchpad)
+
+      expect(uinput1).to have_received(:create_from_device).with(name: described_class::VIRTUAL_TOUCHPAD_NAME, device: source_touchpad)
+      expect(uinput2).to have_received(:create_from_device).with(name: described_class::VIRTUAL_TOUCHPAD_NAME, device: second_touchpad)
+    end
+
+    it "applies scroll channel values to all emulators and writes returned events" do
+      release_event = Revdev::InputEvent.new(nil, Revdev::EV_SYN, Revdev::SYN_REPORT, 0)
+      allow(emulator).to receive(:set_scroll_mode).with(true).and_return([release_event])
+      remapper = described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads,
+        pointer_scroll_enabled: true,
+        scroll_channel: scroll_channel,
+        uinput_factory: uinput_factory,
+        emulator_factory: emulator_factory
+      )
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
+      remapper.instance_variable_set(:@emulators_by_touchpad, {source_touchpad => emulator})
+
+      remapper.send(:read_scroll_channel)
+
+      expect(uinput).to have_received(:write_input_event).with(release_event)
+    end
+
+    it "forwards physical events through the emulator only when enabled" do
+      forwarded_event = Revdev::InputEvent.new(nil, Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 200)
+      allow(emulator).to receive(:process).with(input_event).and_return([forwarded_event])
+      remapper = described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads,
+        pointer_scroll_enabled: true,
+        scroll_channel: scroll_channel,
+        uinput_factory: uinput_factory,
+        emulator_factory: emulator_factory
+      )
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
+      remapper.instance_variable_set(:@emulators_by_touchpad, {source_touchpad => emulator})
+
+      remapper.send(:forward_touchpad_event, source_touchpad, input_event)
+
+      expect(uinput).to have_received(:write_input_event).with(forwarded_event)
     end
   end
 
@@ -269,9 +393,9 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
             [new_device]
           end
         end
-        allow(remapper).to receive(:sleep)
+        allow_any_instance_of(Fusuma::Plugin::Remap::DeviceSelector).to receive(:sleep)
 
-        expect(remapper).to receive(:sleep).with(3).exactly(2).times
+        expect_any_instance_of(Fusuma::Plugin::Remap::DeviceSelector).to receive(:sleep).with(3).exactly(2).times
         remapper.send(:reload_touchpads)
       end
     end
@@ -288,6 +412,7 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
     end
 
     it "logs reconnection info" do
+      allow(Fusuma::MultiLogger).to receive(:info)
       expect(Fusuma::MultiLogger).to receive(:info).with(/Touchpad reconnected/)
       remapper.send(:reload_touchpads)
     end

@@ -10,6 +10,10 @@ module Fusuma
       # Unifies TouchpadSelector implementations across the codebase
       class DeviceSelector
         POLL_INTERVAL = 3 # seconds
+        VIRTUAL_DEVICE_NAMES = [
+          "fusuma_virtual_touchpad",
+          "fusuma_virtual_keyboard"
+        ].freeze
 
         # @param name_patterns [Array, String, nil] patterns for device names
         # @param device_type [Symbol] :touchpad or :keyboard (for logging)
@@ -37,7 +41,7 @@ module Fusuma
         private
 
         def find_devices
-          if @name_patterns
+          devices = if @name_patterns
             Fusuma::Device.all.select { |d|
               Array(@name_patterns).any? { |name| d.name =~ /#{name}/ }
             }
@@ -45,6 +49,12 @@ module Fusuma
             # available returns only touchpad devices
             Fusuma::Device.available
           end
+
+          devices.reject { |device| virtual_device?(device) }
+        end
+
+        def virtual_device?(device)
+          VIRTUAL_DEVICE_NAMES.include?(device.name)
         end
 
         def to_event_devices(devices)

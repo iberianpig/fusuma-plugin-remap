@@ -128,6 +128,21 @@ remap:
   SPACE: BTN_LEFT
 ```
 
+#### Pointer Scroll in Thumbsense Context
+
+`POINTER_SCROLL_FINGER` converts one-finger touchpad motion into native finger scrolling while the remapped key is held in thumbsense context. The key press is swallowed, so it does not type the original character.
+
+```yaml
+---
+context:
+  thumbsense: true
+
+remap:
+  S: POINTER_SCROLL_FINGER
+```
+
+With this configuration, holding <kbd>S</kbd> while touching the touchpad makes one-finger movement scroll instead of moving the pointer. Releasing <kbd>S</kbd> or ending the touch returns the touchpad to normal behavior.
+
 #### Device Context
 
 You can define different remappings for specific keyboard devices. The `device` pattern uses case-insensitive partial matching against the physical device name.

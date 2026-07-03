@@ -3,6 +3,7 @@
 require "json"
 require_relative "../remap/touchpad_remapper"
 require_relative "../remap/device_selector"
+require_relative "../remap/scroll_channel"
 
 module Fusuma
   module Plugin
@@ -10,6 +11,8 @@ module Fusuma
       # Get touchpad events from remapper
       class RemapTouchpadInput < Input
         include CustomProcess
+
+        POINTER_SCROLL_FINGER = "POINTER_SCROLL_FINGER"
 
         def config_param_types
           {
@@ -50,7 +53,8 @@ module Fusuma
         private
 
         def setup_remapper
-          # layer_manager = Remap::LayerManager.instance
+          scroll_channel = Remap::ScrollChannel.instance
+          pointer_scroll_enabled = pointer_scroll_finger_configured?
 
           # physical touchpad input event
           @fusuma_reader, fusuma_writer = IO.pipe
@@ -71,15 +75,38 @@ module Fusuma
             MultiLogger.info("touchpad: #{source_touchpads}")
 
             remapper = Remap::TouchpadRemapper.new(
-              # layer_manager: layer_manager,
               fusuma_writer: fusuma_writer,
               source_touchpads: source_touchpads,
-              touchpad_name_patterns: touchpad_name_patterns
+              touchpad_name_patterns: touchpad_name_patterns,
+              pointer_scroll_enabled: pointer_scroll_enabled,
+              scroll_channel: scroll_channel
             )
             remapper.run
           end
-          # layer_manager.reader.close
           fusuma_writer.close
+        end
+
+        def pointer_scroll_finger_configured?
+          keymap = Fusuma::Config.instance.keymap
+          Array(keymap).any? do |section|
+            remap = section[:remap] || section["remap"]
+            contains_pointer_scroll_finger?(remap)
+          end
+        rescue
+          false
+        end
+
+        def contains_pointer_scroll_finger?(value)
+          case value
+          when Hash
+            value.values.any? { |nested| contains_pointer_scroll_finger?(nested) }
+          when Array
+            value.any? { |nested| contains_pointer_scroll_finger?(nested) }
+          when String, Symbol
+            value.to_s.upcase == POINTER_SCROLL_FINGER
+          else
+            false
+          end
         end
       end
     end

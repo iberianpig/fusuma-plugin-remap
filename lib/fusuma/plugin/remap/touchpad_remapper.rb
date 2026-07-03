@@ -4,6 +4,8 @@ require "set"
 
 require_relative "uinput_touchpad"
 require_relative "device_selector"
+require_relative "scroll_channel"
+require_relative "two_finger_scroll_emulator"
 require "fusuma/device"
 
 module Fusuma
@@ -17,20 +19,37 @@ module Fusuma
         # @param fusuma_writer [IO]
         # @param source_touchpads [Revdev::Device]
         # @param touchpad_name_patterns [Array, String, nil] patterns for touchpad device names (for reconnection)
-        def initialize(fusuma_writer:, source_touchpads:, touchpad_name_patterns: nil)
+        # @param pointer_scroll_enabled [Boolean]
+        # @param scroll_channel [Fusuma::Plugin::Remap::ScrollChannel, nil]
+        def initialize(
+          fusuma_writer:,
+          source_touchpads:,
+          touchpad_name_patterns: nil,
+          pointer_scroll_enabled: false,
+          scroll_channel: nil,
+          uinput_factory: nil,
+          emulator_factory: nil
+        )
           @source_touchpads = source_touchpads # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
           @touchpad_name_patterns = touchpad_name_patterns # for reconnection
+          @pointer_scroll_requested = pointer_scroll_enabled
+          @pointer_scroll_enabled = pointer_scroll_enabled
+          @scroll_channel = pointer_scroll_enabled ? (scroll_channel || ScrollChannel.instance) : scroll_channel
+          @uinput_factory = uinput_factory || -> { UinputTouchpad.new "/dev/uinput" }
+          @emulator_factory = emulator_factory || ->(device) { TwoFingerScrollEmulator.new(device: device) }
+          @uinputs_by_touchpad = {}
+          @emulators_by_touchpad = {}
+          @grabbed_touchpads = []
 
           @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|
             palm_detectors[source_touchpad] = PalmDetection.new(source_touchpad)
           end
 
           set_trap
+          setup_pointer_scroll_forwarding if @pointer_scroll_enabled
         end
 
-        # TODO: grab touchpad events and remap them
-        #       send remapped events to virtual touchpad or virtual mouse
         def run
           create_virtual_touchpad
 
@@ -41,8 +60,15 @@ module Fusuma
           prev_valid_touch = false
           prev_status = nil
           loop do
-            ios = IO.select(@source_touchpads.map(&:file)) # , @layer_manager.reader])
-            io = ios&.first&.first
+            ios = IO.select(selectable_ios)
+            readable_ios = ios&.first || []
+
+            if pointer_scroll_enabled? && readable_ios.include?(@scroll_channel.reader)
+              read_scroll_channel
+              next
+            end
+
+            io = readable_ios.first
 
             touchpad = @source_touchpads.find { |t| t.file == io }
 
@@ -65,6 +91,7 @@ module Fusuma
             # Event: time 1698456258.382693, type 4 (EV_MSC), code 5 (MSC_TIMESTAMP), value 7100
             # Event: time 1698456258.382693, -------------- SYN_REPORT ------------
             input_event = touchpad.read_input_event
+            forward_touchpad_event(touchpad, input_event)
 
             touch_state[mt_slot] ||= {MT_TRACKING_ID: nil, X: nil, Y: nil, valid_touch_point: false}
             syn_report = nil
@@ -188,20 +215,25 @@ module Fusuma
 
         def create_virtual_touchpad
           MultiLogger.info "Create virtual touchpad: #{VIRTUAL_TOUCHPAD_NAME}"
-          # NOTE: Use uinput to create a virtual touchpad that copies from first touchpad
-          uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpads.first)
+          if pointer_scroll_enabled?
+            @source_touchpads.each do |source_touchpad|
+              uinput_for(source_touchpad).create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: source_touchpad)
+            end
+          else
+            # NOTE: Use uinput to create a virtual touchpad that copies from first touchpad
+            uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpads.first)
+          end
         end
 
         # Reload touchpads after device disconnection
         # This method waits until a touchpad is reconnected
         def reload_touchpads
-          # Destroy virtual touchpad
-          begin
-            uinput.destroy
-          rescue IOError
-            # already destroyed
-          end
+          destroy_virtual_touchpads
+          ungrab_touchpads
           @uinput = nil
+          @uinputs_by_touchpad = {}
+          @emulators_by_touchpad = {}
+          @grabbed_touchpads = []
 
           # Wait and detect touchpad using DeviceSelector
           @source_touchpads = DeviceSelector.new(
@@ -214,6 +246,9 @@ module Fusuma
             palm_detectors[source_touchpad] = PalmDetection.new(source_touchpad)
           end
 
+          @pointer_scroll_enabled = @pointer_scroll_requested
+          setup_pointer_scroll_forwarding if @pointer_scroll_enabled
+
           # Recreate virtual touchpad
           create_virtual_touchpad
 
@@ -221,17 +256,100 @@ module Fusuma
         end
 
         def set_trap
-          @destroy = lambda do
+          @destroy = lambda do |status = nil|
+            destroy_virtual_touchpads
+            ungrab_touchpads
+            exit status unless status.nil?
+          end
+
+          Signal.trap(:INT) { @destroy.call(0) }
+          Signal.trap(:TERM) { @destroy.call(0) }
+        end
+
+        def pointer_scroll_enabled?
+          @pointer_scroll_enabled == true
+        end
+
+        def setup_pointer_scroll_forwarding
+          @scroll_channel ||= ScrollChannel.instance
+          grab_touchpads_for_forwarding
+          return unless pointer_scroll_enabled?
+
+          @source_touchpads.each do |source_touchpad|
+            emulator_for(source_touchpad)
+          end
+        end
+
+        def grab_touchpads_for_forwarding
+          @source_touchpads.each do |source_touchpad|
+            source_touchpad.grab
+            @grabbed_touchpads << source_touchpad
+          end
+        rescue Errno::EBUSY => e
+          MultiLogger.warn "Failed to grab touchpad for pointer scroll forwarding: #{e.message}"
+          ungrab_touchpads
+          @pointer_scroll_enabled = false
+          @scroll_channel = nil
+          @emulators_by_touchpad = {}
+        end
+
+        def selectable_ios
+          ios = @source_touchpads.map(&:file)
+          ios.unshift(@scroll_channel.reader) if pointer_scroll_enabled?
+          ios
+        end
+
+        def read_scroll_channel
+          enabled = @scroll_channel.receive
+          return if enabled.nil?
+
+          @emulators_by_touchpad.each do |touchpad, emulator|
+            write_forwarded_events(touchpad, emulator.set_scroll_mode(enabled))
+          end
+        end
+
+        def forward_touchpad_event(touchpad, input_event)
+          return unless pointer_scroll_enabled?
+
+          write_forwarded_events(touchpad, emulator_for(touchpad).process(input_event))
+        end
+
+        def write_forwarded_events(touchpad, events)
+          uinput_device = uinput_for(touchpad)
+          events.each { |event| uinput_device.write_input_event(event) }
+        end
+
+        def uinput_for(touchpad)
+          @uinputs_by_touchpad[touchpad] ||= @uinput_factory.call
+        end
+
+        def emulator_for(touchpad)
+          @emulators_by_touchpad[touchpad] ||= @emulator_factory.call(touchpad)
+        end
+
+        def destroy_virtual_touchpads
+          if @uinputs_by_touchpad&.any?
+            @uinputs_by_touchpad.each_value do |uinput_device|
+              uinput_device.destroy
+            rescue IOError
+              # already destroyed
+            end
+          else
             begin
               uinput.destroy
             rescue IOError
               # already destroyed
             end
-            exit 0
           end
+        end
 
-          Signal.trap(:INT) { @destroy.call }
-          Signal.trap(:TERM) { @destroy.call }
+        def ungrab_touchpads
+          @grabbed_touchpads.each do |touchpad|
+            touchpad.ungrab
+          rescue Errno::EINVAL, Errno::ENODEV
+            # already ungrabbed or removed
+          end
+          @grabbed_touchpads = []
         end
 
         # Detect palm touch

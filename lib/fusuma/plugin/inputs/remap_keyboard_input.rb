@@ -3,6 +3,7 @@
 require "json"
 require_relative "../remap/keyboard_remapper"
 require_relative "../remap/layer_manager"
+require_relative "../remap/scroll_channel"
 
 module Fusuma
   module Plugin
@@ -54,6 +55,7 @@ module Fusuma
           }
 
           layer_manager = Remap::LayerManager.instance
+          scroll_channel = Remap::ScrollChannel.instance
 
           # physical keyboard input event
           @fusuma_reader, fusuma_writer = IO.pipe
@@ -64,7 +66,8 @@ module Fusuma
             remapper = Remap::KeyboardRemapper.new(
               layer_manager: layer_manager,
               fusuma_writer: fusuma_writer,
-              config: config
+              config: config,
+              scroll_channel: scroll_channel
             )
             remapper.run
           end

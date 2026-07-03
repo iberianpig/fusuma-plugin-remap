@@ -2,6 +2,7 @@ require "revdev"
 require "json"
 require "set"
 require_relative "layer_manager"
+require_relative "scroll_channel"
 require_relative "uinput_keyboard"
 require_relative "device_selector"
 require_relative "device_matcher"
@@ -17,6 +18,7 @@ module Fusuma
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
         DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
         DEVICE_CHECK_INTERVAL = 3 # seconds - interval for checking new devices
+        POINTER_SCROLL_FINGER = "POINTER_SCROLL_FINGER".freeze
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -29,10 +31,12 @@ module Fusuma
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
         # @param fusuma_writer [IO]
         # @param config [Hash]
-        def initialize(layer_manager:, fusuma_writer:, config: {})
+        # @param scroll_channel [Fusuma::Plugin::Remap::ScrollChannel]
+        def initialize(layer_manager:, fusuma_writer:, config: {}, scroll_channel: ScrollChannel.instance)
           @layer_manager = layer_manager # request to change layer
           @fusuma_writer = fusuma_writer # write event to original keyboard
           @config = config
+          @scroll_channel = scroll_channel
           @device_matcher = DeviceMatcher.new
           @device_mappings = {}
         end
@@ -136,6 +140,8 @@ module Fusuma
                   return
                 end
               end
+
+              next if handle_pressed_pointer_scroll_key(input_event)
             end
 
             remapped, is_modifier_remap = find_remapping(combo_mapping, effective_key)
@@ -177,6 +183,8 @@ module Fusuma
               MultiLogger.warn("Invalid remapped value - type: #{remapped.class}, key: #{input_key}")
               next
             end
+
+            next if handle_pointer_scroll_press(input_event, remapped)
 
             # For modifier remaps, handle specially:
             # Release currently pressed modifiers → Send remapped key → Re-press modifiers
@@ -307,6 +315,40 @@ module Fusuma
 
         def pressed_key_names
           @pressed_key_names ||= {}
+        end
+
+        def scroll_pressed_codes
+          @scroll_pressed_codes ||= Set.new
+        end
+
+        def pointer_scroll_finger_remap?(remapped)
+          remapped.to_s.upcase == POINTER_SCROLL_FINGER
+        end
+
+        def handle_pressed_pointer_scroll_key(input_event)
+          return false unless input_event.type == EV_KEY
+
+          case input_event.value
+          when 0
+            return false unless scroll_pressed_codes.delete?(input_event.code)
+
+            @scroll_channel.send_scroll(false) if scroll_pressed_codes.empty?
+            true
+          when 2
+            scroll_pressed_codes.include?(input_event.code)
+          else
+            false
+          end
+        end
+
+        def handle_pointer_scroll_press(input_event, remapped)
+          return false unless input_event.type == EV_KEY
+          return false unless input_event.value == 1
+          return false unless pointer_scroll_finger_remap?(remapped)
+
+          scroll_pressed_codes.add(input_event.code)
+          @scroll_channel.send_scroll(true)
+          true
         end
 
         # Record key name on press and return recorded name on release
@@ -573,7 +615,7 @@ module Fusuma
 
             if key_str.include?("+")
               combo_remap[key] = value
-            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+")
+            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+") || pointer_scroll_finger_remap?(value)
               combo_remap[key] = value
             else
               simple_remap[key] = value
@@ -722,7 +764,7 @@ module Fusuma
           end
 
           # Release all keys in reverse order
-          keys.reverse.each do |key|
+          keys.reverse_each do |key|
             code = key_to_code(key)
             next unless code
 
