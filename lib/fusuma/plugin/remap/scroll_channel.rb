@@ -21,8 +21,8 @@ module Fusuma
           return if @last_scroll == enabled
 
           @last_scroll = enabled
-          @writer.puts({scroll: enabled}.to_json)
-        rescue IOError, Errno::EPIPE
+          @writer.write_nonblock({scroll: enabled}.to_json + "\n")
+        rescue IO::WaitWritable, Errno::EAGAIN, IOError, Errno::EPIPE
           nil
         end
 

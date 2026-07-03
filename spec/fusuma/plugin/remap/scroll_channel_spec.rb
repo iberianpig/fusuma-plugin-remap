@@ -36,5 +36,25 @@ RSpec.describe Fusuma::Plugin::Remap::ScrollChannel do
 
       expect(channel.receive).to be_nil
     end
+
+    it "returns without blocking or raising when the pipe is full and unread" do
+      channel = build_channel
+      fill_pipe(channel.writer)
+
+      thread = Thread.new { channel.send_scroll(true) }
+
+      expect(thread.join(0.2)).to eq(thread)
+    ensure
+      thread&.kill
+      thread&.join
+    end
+  end
+
+  def fill_pipe(writer)
+    loop do
+      writer.write_nonblock("x" * 4096)
+    end
+  rescue IO::WaitWritable, Errno::EAGAIN
+    nil
   end
 end
