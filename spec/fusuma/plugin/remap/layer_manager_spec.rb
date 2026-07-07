@@ -333,4 +333,26 @@ RSpec.describe Fusuma::Plugin::Remap::LayerManager do
       expect(result).to eq({A: "b"})
     end
   end
+
+  describe "#normalize_mapping" do
+    it "converts mixed remap config into native protocol entries" do
+      mapping = {
+        :capslock => "leftctrl",
+        "leftctrl+a" => "home",
+        :x => ["leftshift+home", "delete"],
+        :y => {command: "echo y"},
+        :z => "leftctrl+tab",
+        "KEY_ESC" => "KEY_ENTER"
+      }
+
+      expect(manager.normalize_mapping(mapping)).to eq([
+        ["CAPSLOCK", "simple", "LEFTCTRL"],
+        ["LEFTCTRL+A", "combo", "HOME"],
+        ["X", "seq", "LEFTSHIFT+HOME|DELETE"],
+        ["Y", "swallow", ""],
+        ["Z", "combo", "LEFTCTRL+TAB"],
+        ["ESC", "simple", "ENTER"]
+      ])
+    end
+  end
 end
