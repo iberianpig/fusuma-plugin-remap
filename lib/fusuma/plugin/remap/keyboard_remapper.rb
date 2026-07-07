@@ -722,7 +722,7 @@ module Fusuma
           end
 
           # Release all keys in reverse order
-          keys.reverse.each do |key|
+          keys.reverse_each do |key|
             code = key_to_code(key)
             next unless code
 
