@@ -62,6 +62,7 @@ module Fusuma
 
           fork do
             layer_manager.writer.close
+            scroll_channel.reader.close
             @fusuma_reader.close
             remapper = Remap::KeyboardRemapper.new(
               layer_manager: layer_manager,

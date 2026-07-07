@@ -62,6 +62,7 @@ module Fusuma
 
           fork do
             # layer_manager.writer.close
+            scroll_channel.writer.close
             @fusuma_reader.close
 
             # DeviceSelector waits until touchpad is found (like KeyboardSelector)

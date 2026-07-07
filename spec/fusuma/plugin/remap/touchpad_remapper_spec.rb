@@ -180,6 +180,34 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
       expect(uinput).to have_received(:write_input_event).with(release_event)
     end
 
+    it "handles scroll channel EOF by releasing scroll and continuing forwarding" do
+      channel = Fusuma::Plugin::Remap::ScrollChannel.__send__(:new)
+      channel.writer.close
+      release_event = Revdev::InputEvent.new(nil, Revdev::EV_SYN, Revdev::SYN_REPORT, 0)
+      forwarded_event = Revdev::InputEvent.new(nil, Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 200)
+      allow(emulator).to receive(:set_scroll_mode).with(false).and_return([release_event])
+      allow(emulator).to receive(:process).with(input_event).and_return([forwarded_event])
+      remapper = described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads,
+        pointer_scroll_enabled: true,
+        scroll_channel: channel,
+        uinput_factory: uinput_factory,
+        emulator_factory: emulator_factory
+      )
+
+      remapper.send(:read_scroll_channel)
+
+      expect(channel.reader).to be_closed
+      expect(remapper.send(:selectable_ios)).not_to include(channel.reader)
+      expect(uinput).to have_received(:write_input_event).with(release_event)
+      expect(remapper.send(:pointer_scroll_enabled?)).to be true
+
+      remapper.send(:forward_touchpad_event, source_touchpad, input_event)
+
+      expect(uinput).to have_received(:write_input_event).with(forwarded_event)
+    end
+
     it "forwards physical events through the emulator only when enabled" do
       forwarded_event = Revdev::InputEvent.new(nil, Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 200)
       allow(emulator).to receive(:process).with(input_event).and_return([forwarded_event])

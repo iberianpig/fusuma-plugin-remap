@@ -35,7 +35,7 @@ module Fusuma
           @touchpad_name_patterns = touchpad_name_patterns # for reconnection
           @pointer_scroll_requested = pointer_scroll_enabled
           @pointer_scroll_enabled = pointer_scroll_enabled
-          @scroll_channel = pointer_scroll_enabled ? (scroll_channel || ScrollChannel.instance) : scroll_channel
+          @scroll_channel = pointer_scroll_enabled ? (scroll_channel || ScrollChannel.instance) : nil
           @uinput_factory = uinput_factory || -> { UinputTouchpad.new "/dev/uinput" }
           @emulator_factory = emulator_factory || ->(device) { TwoFingerScrollEmulator.new(device: device) }
           @uinputs_by_touchpad = {}
@@ -63,7 +63,7 @@ module Fusuma
             ios = IO.select(selectable_ios)
             readable_ios = ios&.first || []
 
-            if pointer_scroll_enabled? && readable_ios.include?(@scroll_channel.reader)
+            if scroll_channel_readable?(readable_ios)
               read_scroll_channel
               next
             end
@@ -295,16 +295,52 @@ module Fusuma
 
         def selectable_ios
           ios = @source_touchpads.map(&:file)
-          ios.unshift(@scroll_channel.reader) if pointer_scroll_enabled?
+          reader = scroll_channel_reader
+          ios.unshift(reader) if reader
           ios
         end
 
         def read_scroll_channel
           enabled = @scroll_channel.receive
+          if enabled == :closed
+            close_scroll_channel_reader
+            disable_scroll_mode
+            return
+          end
+
           return if enabled.nil?
 
           @emulators_by_touchpad.each do |touchpad, emulator|
             write_forwarded_events(touchpad, emulator.set_scroll_mode(enabled))
+          end
+        end
+
+        def scroll_channel_readable?(readable_ios)
+          reader = scroll_channel_reader
+          reader && readable_ios.include?(reader)
+        end
+
+        def scroll_channel_reader
+          return unless @scroll_channel
+
+          reader = @scroll_channel.reader
+          return if reader.respond_to?(:closed?) && reader.closed?
+
+          reader
+        rescue IOError
+          nil
+        end
+
+        def close_scroll_channel_reader
+          reader = @scroll_channel.reader
+          reader.close unless reader.closed?
+        rescue IOError
+          nil
+        end
+
+        def disable_scroll_mode
+          @emulators_by_touchpad.each do |touchpad, emulator|
+            write_forwarded_events(touchpad, emulator.set_scroll_mode(false))
           end
         end
 

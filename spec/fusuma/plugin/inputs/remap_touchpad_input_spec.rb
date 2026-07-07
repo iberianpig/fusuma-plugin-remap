@@ -19,9 +19,20 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
   end
 
   describe "#setup_remapper" do
+    let(:scroll_reader) { instance_double("IO", close: nil) }
+    let(:scroll_writer) { instance_double("IO", close: nil) }
+    let(:scroll_channel) do
+      instance_double(
+        "Fusuma::Plugin::Remap::ScrollChannel",
+        reader: scroll_reader,
+        writer: scroll_writer
+      )
+    end
+
     before do
       allow_any_instance_of(described_class).to receive(:fork).and_yield
       allow_any_instance_of(described_class).to receive(:config_params).and_return(nil)
+      allow(Fusuma::Plugin::Remap::ScrollChannel).to receive(:instance).and_return(scroll_channel)
     end
 
     describe "IO pipe creation" do
@@ -76,13 +87,10 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
     end
 
     describe "pointer scroll wiring" do
-      let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel") }
-
       before do
         allow_any_instance_of(described_class).to receive(:config_params).with(:touchpad_name_patterns).and_return(["Touchpad"])
         allow(IO).to receive(:pipe).and_return([double(close: nil), double(close: nil)])
         allow_any_instance_of(Fusuma::Plugin::Remap::DeviceSelector).to receive(:select).and_return([])
-        allow(Fusuma::Plugin::Remap::ScrollChannel).to receive(:instance).and_return(scroll_channel)
       end
 
       it "passes pointer_scroll_enabled when POINTER_SCROLL appears in any remap value" do
@@ -108,6 +116,18 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
         expect(Fusuma::Plugin::Remap::TouchpadRemapper).to receive(:new).with(
           hash_including(pointer_scroll_enabled: false, scroll_channel: scroll_channel)
         ).and_return(double(run: nil))
+
+        described_class.new
+      end
+
+      it "closes the unused scroll channel writer inside the child fork" do
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: "POINTER_SCROLL"}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+        allow(Fusuma::Plugin::Remap::TouchpadRemapper).to receive(:new).and_return(double(run: nil))
+
+        expect(scroll_writer).to receive(:close)
 
         described_class.new
       end
