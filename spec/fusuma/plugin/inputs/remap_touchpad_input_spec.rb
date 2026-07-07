@@ -157,6 +157,15 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
 
         expect(input.send(:pointer_scroll_configured?)).to be false
       end
+
+      it "warns and returns false when config detection fails" do
+        input = described_class.new
+        allow(Fusuma::Config).to receive(:instance).and_raise(StandardError, "broken config")
+
+        expect(Fusuma::MultiLogger).to receive(:warn).with("Failed to detect POINTER_SCROLL config: broken config")
+
+        expect(input.send(:pointer_scroll_configured?)).to be false
+      end
     end
 
     describe "non-blocking behavior" do

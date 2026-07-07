@@ -93,7 +93,8 @@ module Fusuma
             remap = section[:remap] || section["remap"]
             contains_pointer_scroll?(remap)
           end
-        rescue
+        rescue => e
+          MultiLogger.warn("Failed to detect POINTER_SCROLL config: #{e.message}")
           false
         end
 
