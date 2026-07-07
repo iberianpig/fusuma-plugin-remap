@@ -39,7 +39,7 @@ module Fusuma
           enabled = !!enabled
           return [] if @scroll_mode == enabled
 
-          buffered_frame = drain_frame_events
+          buffered_frame, _ = drain_frame_events
           @scroll_mode = enabled
           return buffered_frame if enabled
 
@@ -81,7 +81,6 @@ module Fusuma
           case input_event.code
           when ABS_MT_SLOT
             @current_slot = input_event.value
-            @slots[@current_slot]
           when ABS_MT_TRACKING_ID
             slot_state = @slots[@current_slot]
             slot_state[:tracking_id] = input_event.value
@@ -107,24 +106,23 @@ module Fusuma
 
         def drain_frame_events
           frame = @frame_events
-          @frame_events = []
-          @frame_motion_slots = Set.new
-          frame
-        end
-
-        def flush_frame
-          frame = @frame_events
           motion_slots = @frame_motion_slots
           @frame_events = []
           @frame_motion_slots = Set.new
+          [frame, motion_slots]
+        end
 
-          count = real_finger_count
+        def flush_frame
+          frame, motion_slots = drain_frame_events
+
+          active_slots = real_slots
+          count = active_slots.size
           if synthetic_active? && (count.zero? || count >= 2)
             return frame_with_synthetic_release(frame, count)
           end
 
           if @scroll_mode
-            real_slot = single_real_slot
+            real_slot = (count == 1) ? active_slots.first : nil
             if !synthetic_active? && count == 1 && motion_slots.include?(real_slot)
               return frame unless activate_synthetic(real_slot)
 
@@ -181,30 +179,32 @@ module Fusuma
         end
 
         def available_synthetic_slot
-          real = real_slots.to_set
-          (@slot_min..@slot_max).to_a.reverse.find { |slot| !real.include?(slot) }
+          @slot_max.downto(@slot_min).find { |slot| !real_slot_active?(slot) }
         end
 
         def frame_with_synthetic_touch(frame, real_slot, include_tracking_id:)
           return frame unless real_slot && @synthetic
 
-          without_syn = frame_without_syn_or_tool_buttons(frame)
           synthetic_x, synthetic_y = synthetic_position_for(real_slot)
 
-          events = without_syn.dup
+          events = frame_without_syn_or_tool_buttons(frame)
           events << input_event(EV_ABS, ABS_MT_SLOT, @synthetic[:slot])
           events << input_event(EV_ABS, ABS_MT_TRACKING_ID, @synthetic[:tracking_id]) if include_tracking_id
           events << input_event(EV_ABS, ABS_MT_POSITION_X, synthetic_x)
           events << input_event(EV_ABS, ABS_MT_POSITION_Y, synthetic_y)
-          events.concat(tool_events(2))
-          events << input_event(EV_KEY, BTN_TOUCH, 1) unless frame_has_btn_touch?(frame)
+          if include_tracking_id
+            # Tool/touch state only changes when the synthetic finger appears;
+            # the kernel keeps key state between frames, so mirror frames need no re-emission
+            events.concat(tool_events(2))
+            events << input_event(EV_KEY, BTN_TOUCH, 1) unless frame_has_btn_touch?(frame)
+          end
           events << input_event(EV_ABS, ABS_MT_SLOT, real_slot)
           events << syn_event
           events
         end
 
         def frame_with_synthetic_release(frame, real_count)
-          events = frame_without_syn_or_tool_buttons(frame).dup
+          events = frame_without_syn_or_tool_buttons(frame)
           events.concat(release_synthetic_events(real_count, restore_slot: single_real_slot || @current_slot))
           events << syn_event
           events
@@ -232,13 +232,9 @@ module Fusuma
 
         def synthetic_position_for(real_slot)
           real = @slots[real_slot]
-          x = clamp(real[:x] + @synthetic[:offset], @x_min, @x_max)
-          y = clamp(real[:y], @y_min, @y_max)
+          x = (real[:x] + @synthetic[:offset]).clamp(@x_min, @x_max)
+          y = real[:y].clamp(@y_min, @y_max)
           [x, y]
-        end
-
-        def clamp(value, min, max)
-          value.clamp(min, max)
         end
 
         def tool_events(finger_count)

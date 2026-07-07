@@ -15,10 +15,10 @@ module Fusuma
       class KeyboardRemapper
         include Revdev
 
-        VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
+        VIRTUAL_KEYBOARD_NAME = DeviceSelector::VIRTUAL_KEYBOARD_NAME
         DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
         DEVICE_CHECK_INTERVAL = 3 # seconds - interval for checking new devices
-        POINTER_SCROLL = "POINTER_SCROLL".freeze
+        POINTER_SCROLL = ScrollChannel::POINTER_SCROLL
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -173,10 +173,7 @@ module Fusuma
                   write_event_with_log(input_event, context: "simple remap failed")
                 end
               else
-                # Passthrough: record key code to ensure press/release consistency
-                output_code = get_or_record_key_code(input_event.code, input_event.code, input_event.value)
-                passthrough_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
-                write_event_with_log(passthrough_event, context: "passthrough")
+                write_passthrough_event(input_event)
               end
               next
             else
@@ -324,7 +321,7 @@ module Fusuma
         end
 
         def pointer_scroll_remap?(remapped)
-          remapped.to_s.upcase == POINTER_SCROLL
+          ScrollChannel.pointer_scroll_value?(remapped)
         end
 
         def handle_pressed_pointer_scroll_key(input_event)
@@ -357,12 +354,18 @@ module Fusuma
           return false unless input_event.type == EV_KEY
           return false if input_event.value == 1
           return false unless pointer_scroll_remap?(remapped)
-          return false if scroll_pressed_codes.include?(input_event.code)
 
+          # Reaching here means the press was not swallowed (the key went down
+          # before the layer changed), so pass the release/repeat through as-is
+          write_passthrough_event(input_event)
+          true
+        end
+
+        # Passthrough: record key code to ensure press/release consistency
+        def write_passthrough_event(input_event)
           output_code = get_or_record_key_code(input_event.code, input_event.code, input_event.value)
           passthrough_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
           write_event_with_log(passthrough_event, context: "passthrough")
-          true
         end
 
         def reset_scroll_keys_after_device_removed

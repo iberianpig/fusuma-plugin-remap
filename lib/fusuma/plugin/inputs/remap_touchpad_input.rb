@@ -12,8 +12,6 @@ module Fusuma
       class RemapTouchpadInput < Input
         include CustomProcess
 
-        POINTER_SCROLL = "POINTER_SCROLL"
-
         def config_param_types
           {
             touchpad_name_patterns: [Array, String]
@@ -104,10 +102,8 @@ module Fusuma
             value.values.any? { |nested| contains_pointer_scroll?(nested) }
           when Array
             value.any? { |nested| contains_pointer_scroll?(nested) }
-          when String, Symbol
-            value.to_s.upcase == POINTER_SCROLL
           else
-            false
+            Remap::ScrollChannel.pointer_scroll_value?(value)
           end
         end
       end

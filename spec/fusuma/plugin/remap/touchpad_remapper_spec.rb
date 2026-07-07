@@ -5,7 +5,7 @@ require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
   let(:fusuma_writer) { instance_double("IO", write: nil) }
-  let(:absinfo) { {absmin: 0, absmax: 1000, absfuzz: 0, absflat: 0, absresolution: 0} }
+  let(:absinfo) { {absmin: 0, absmax: 1000, absfuzz: 0, absflat: 0, resolution: 0} }
   let(:source_touchpad) do
     instance_double(
       "Revdev::EventDevice",
@@ -86,7 +86,7 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
     end
 
     context "with pointer scroll forwarding enabled" do
-      let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel", reader: double("reader")) }
+      let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel", reader: double("reader", closed?: false)) }
       let(:uinput_factory) { -> { double("UinputTouchpad", create_from_device: nil, destroy: nil, write_input_event: nil) } }
       let(:emulator_factory) { ->(device) { double("TwoFingerScrollEmulator", device: device) } }
 
@@ -126,7 +126,7 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
   end
 
   describe "pointer scroll forwarding helpers" do
-    let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel", reader: double("reader"), receive: true) }
+    let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel", reader: double("reader", closed?: false), receive: true) }
     let(:uinput) { double("UinputTouchpad", create_from_device: nil, destroy: nil, write_input_event: nil) }
     let(:emulator) { double("TwoFingerScrollEmulator") }
     let(:uinput_factory) { -> { uinput } }
@@ -195,6 +195,7 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
         uinput_factory: uinput_factory,
         emulator_factory: emulator_factory
       )
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
 
       remapper.send(:read_scroll_channel)
 
@@ -356,31 +357,33 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
       described_class.new(
         fusuma_writer: fusuma_writer,
         source_touchpads: source_touchpads,
-        touchpad_name_patterns: ["Touchpad"]
+        touchpad_name_patterns: ["Touchpad"],
+        uinput_factory: -> { uinput }
       )
     end
 
     before do
-      allow(remapper).to receive(:uinput).and_return(uinput)
       allow(Fusuma::Device).to receive(:reset)
       allow(Fusuma::Device).to receive(:all).and_return([new_device])
       allow(Revdev::EventDevice).to receive(:new).and_return(new_touchpad)
     end
 
     it "destroys existing uinput" do
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
       expect(uinput).to receive(:destroy)
       remapper.send(:reload_touchpads)
     end
 
     it "handles IOError when destroying uinput (already destroyed)" do
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
       allow(uinput).to receive(:destroy).and_raise(IOError)
       expect { remapper.send(:reload_touchpads) }.not_to raise_error
     end
 
-    it "resets @uinput to nil" do
-      remapper.instance_variable_set(:@uinput, uinput)
+    it "rebuilds virtual touchpads keyed by the reconnected devices" do
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
       remapper.send(:reload_touchpads)
-      expect(remapper.instance_variable_get(:@uinput)).to be_nil
+      expect(remapper.instance_variable_get(:@uinputs_by_touchpad).keys).to eq([new_touchpad])
     end
 
     it "calls Fusuma::Device.reset to refresh device cache" do
@@ -400,7 +403,8 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
         described_class.new(
           fusuma_writer: fusuma_writer,
           source_touchpads: source_touchpads,
-          touchpad_name_patterns: nil
+          touchpad_name_patterns: nil,
+          uinput_factory: -> { uinput }
         )
       end
 

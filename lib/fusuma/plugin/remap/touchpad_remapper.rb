@@ -14,7 +14,7 @@ module Fusuma
       class TouchpadRemapper
         include Revdev
 
-        VIRTUAL_TOUCHPAD_NAME = "fusuma_virtual_touchpad"
+        VIRTUAL_TOUCHPAD_NAME = DeviceSelector::VIRTUAL_TOUCHPAD_NAME
 
         # @param fusuma_writer [IO]
         # @param source_touchpads [Revdev::Device]
@@ -33,9 +33,10 @@ module Fusuma
           @source_touchpads = source_touchpads # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
           @touchpad_name_patterns = touchpad_name_patterns # for reconnection
-          @pointer_scroll_requested = pointer_scroll_enabled
-          @pointer_scroll_enabled = pointer_scroll_enabled
-          @scroll_channel = pointer_scroll_enabled ? (scroll_channel || ScrollChannel.instance) : nil
+          @pointer_scroll_requested = !!pointer_scroll_enabled
+          @pointer_scroll_enabled = @pointer_scroll_requested
+          # Assigned once; whether forwarding is active is tracked solely by @pointer_scroll_enabled
+          @scroll_channel = @pointer_scroll_requested ? (scroll_channel || ScrollChannel.instance) : nil
           @uinput_factory = uinput_factory || -> { UinputTouchpad.new "/dev/uinput" }
           @emulator_factory = emulator_factory || ->(device) { TwoFingerScrollEmulator.new(device: device) }
           @uinputs_by_touchpad = {}
@@ -63,7 +64,8 @@ module Fusuma
             ios = IO.select(selectable_ios)
             readable_ios = ios&.first || []
 
-            if scroll_channel_readable?(readable_ios)
+            reader = scroll_channel_reader
+            if reader && readable_ios.include?(reader)
               read_scroll_channel
               next
             end
@@ -209,19 +211,14 @@ module Fusuma
 
         private
 
-        def uinput
-          @uinput ||= UinputTouchpad.new "/dev/uinput"
-        end
-
         def create_virtual_touchpad
           MultiLogger.info "Create virtual touchpad: #{VIRTUAL_TOUCHPAD_NAME}"
-          if pointer_scroll_enabled?
-            @source_touchpads.each do |source_touchpad|
-              uinput_for(source_touchpad).create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: source_touchpad)
-            end
-          else
-            # NOTE: Use uinput to create a virtual touchpad that copies from first touchpad
-            uinput.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: @source_touchpads.first)
+          # NOTE: Without forwarding, a single virtual touchpad copied from the
+          # first touchpad is enough because it never receives events
+          targets = pointer_scroll_enabled? ? @source_touchpads : [@source_touchpads.first]
+          targets.each do |source_touchpad|
+            device = @uinputs_by_touchpad[source_touchpad] ||= @uinput_factory.call
+            device.create_from_device(name: VIRTUAL_TOUCHPAD_NAME, device: source_touchpad)
           end
         end
 
@@ -230,10 +227,7 @@ module Fusuma
         def reload_touchpads
           destroy_virtual_touchpads
           ungrab_touchpads
-          @uinput = nil
-          @uinputs_by_touchpad = {}
           @emulators_by_touchpad = {}
-          @grabbed_touchpads = []
 
           # Wait and detect touchpad using DeviceSelector
           @source_touchpads = DeviceSelector.new(
@@ -248,6 +242,7 @@ module Fusuma
 
           @pointer_scroll_enabled = @pointer_scroll_requested
           setup_pointer_scroll_forwarding if @pointer_scroll_enabled
+          @selectable_ios = nil
 
           # Recreate virtual touchpad
           create_virtual_touchpad
@@ -267,16 +262,15 @@ module Fusuma
         end
 
         def pointer_scroll_enabled?
-          @pointer_scroll_enabled == true
+          @pointer_scroll_enabled
         end
 
         def setup_pointer_scroll_forwarding
-          @scroll_channel ||= ScrollChannel.instance
           grab_touchpads_for_forwarding
           return unless pointer_scroll_enabled?
 
           @source_touchpads.each do |source_touchpad|
-            emulator_for(source_touchpad)
+            @emulators_by_touchpad[source_touchpad] ||= @emulator_factory.call(source_touchpad)
           end
         end
 
@@ -289,42 +283,43 @@ module Fusuma
           MultiLogger.warn "Failed to grab touchpad for pointer scroll forwarding: #{e.message}"
           ungrab_touchpads
           @pointer_scroll_enabled = false
-          @scroll_channel = nil
           @emulators_by_touchpad = {}
         end
 
+        # Rebuilt only when the sources or the scroll channel reader change
         def selectable_ios
-          ios = @source_touchpads.map(&:file)
-          reader = scroll_channel_reader
-          ios.unshift(reader) if reader
-          ios
+          @selectable_ios ||= begin
+            ios = @source_touchpads.map(&:file)
+            reader = scroll_channel_reader
+            ios.unshift(reader) if reader
+            ios
+          end
         end
 
         def read_scroll_channel
           enabled = @scroll_channel.receive
           if enabled == :closed
             close_scroll_channel_reader
-            disable_scroll_mode
+            apply_scroll_mode(false)
             return
           end
 
           return if enabled.nil?
 
+          apply_scroll_mode(enabled)
+        end
+
+        def apply_scroll_mode(enabled)
           @emulators_by_touchpad.each do |touchpad, emulator|
             write_forwarded_events(touchpad, emulator.set_scroll_mode(enabled))
           end
         end
 
-        def scroll_channel_readable?(readable_ios)
-          reader = scroll_channel_reader
-          reader && readable_ios.include?(reader)
-        end
-
         def scroll_channel_reader
-          return unless @scroll_channel
+          return unless pointer_scroll_enabled? && @scroll_channel
 
           reader = @scroll_channel.reader
-          return if reader.respond_to?(:closed?) && reader.closed?
+          return if reader.closed?
 
           reader
         rescue IOError
@@ -334,49 +329,30 @@ module Fusuma
         def close_scroll_channel_reader
           reader = @scroll_channel.reader
           reader.close unless reader.closed?
+          @selectable_ios = nil
         rescue IOError
-          nil
-        end
-
-        def disable_scroll_mode
-          @emulators_by_touchpad.each do |touchpad, emulator|
-            write_forwarded_events(touchpad, emulator.set_scroll_mode(false))
-          end
+          @selectable_ios = nil
         end
 
         def forward_touchpad_event(touchpad, input_event)
           return unless pointer_scroll_enabled?
 
-          write_forwarded_events(touchpad, emulator_for(touchpad).process(input_event))
+          emulator = @emulators_by_touchpad.fetch(touchpad)
+          write_forwarded_events(touchpad, emulator.process(input_event))
         end
 
         def write_forwarded_events(touchpad, events)
-          uinput_device = uinput_for(touchpad)
+          uinput_device = @uinputs_by_touchpad.fetch(touchpad)
           events.each { |event| uinput_device.write_input_event(event) }
         end
 
-        def uinput_for(touchpad)
-          @uinputs_by_touchpad[touchpad] ||= @uinput_factory.call
-        end
-
-        def emulator_for(touchpad)
-          @emulators_by_touchpad[touchpad] ||= @emulator_factory.call(touchpad)
-        end
-
         def destroy_virtual_touchpads
-          if @uinputs_by_touchpad&.any?
-            @uinputs_by_touchpad.each_value do |uinput_device|
-              uinput_device.destroy
-            rescue IOError
-              # already destroyed
-            end
-          else
-            begin
-              uinput.destroy
-            rescue IOError
-              # already destroyed
-            end
+          @uinputs_by_touchpad.each_value do |uinput_device|
+            uinput_device.destroy
+          rescue IOError
+            # already destroyed
           end
+          @uinputs_by_touchpad = {}
         end
 
         def ungrab_touchpads
