@@ -661,6 +661,63 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       expect(remapper.send(:handle_pressed_pointer_scroll_key, release_event)).to be true
       expect(remapper.send(:scroll_pressed_codes)).not_to include(Revdev::KEY_S)
     end
+
+    it "passes through a token-mapped release when the scroll key was not pressed in scroll mode" do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      allow(uinput_keyboard).to receive(:write_input_event)
+      remapper.send(:get_or_record_key_code, Revdev::KEY_S, Revdev::KEY_S, 1)
+
+      expect(Fusuma::MultiLogger).not_to receive(:warn).with(/Invalid remapped value/)
+
+      handled = remapper.send(:handle_pointer_scroll_passthrough, release_event, "POINTER_SCROLL")
+
+      expect(handled).to be true
+      expect(uinput_keyboard).to have_received(:write_input_event) do |event|
+        expect(event.type).to eq(Revdev::EV_KEY)
+        expect(event.code).to eq(Revdev::KEY_S)
+        expect(event.value).to eq(0)
+      end
+    end
+
+    it "passes through a token-mapped repeat when the scroll key was not pressed in scroll mode" do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      allow(uinput_keyboard).to receive(:write_input_event)
+
+      expect(Fusuma::MultiLogger).not_to receive(:warn).with(/Invalid remapped value/)
+
+      handled = remapper.send(:handle_pointer_scroll_passthrough, repeat_event, "POINTER_SCROLL")
+
+      expect(handled).to be true
+      expect(uinput_keyboard).to have_received(:write_input_event) do |event|
+        expect(event.type).to eq(Revdev::EV_KEY)
+        expect(event.code).to eq(Revdev::KEY_S)
+        expect(event.value).to eq(2)
+      end
+    end
+
+    it "sends scroll off and clears pressed scroll keys when a keyboard is removed" do
+      keyboard_file = instance_double("IO")
+      source_keyboard = instance_double(
+        "Revdev::EventDevice",
+        file: keyboard_file,
+        read_input_event: nil
+      )
+      layer_reader = instance_double("IO")
+      allow(layer_manager).to receive(:reader).and_return(layer_reader)
+      allow(remapper).to receive(:create_virtual_keyboard)
+      allow(remapper).to receive(:reload_keyboards).and_return([source_keyboard])
+      allow(Fusuma::MultiLogger).to receive(:error)
+      expect(IO).to receive(:select).and_return([[keyboard_file]]).ordered
+      expect(IO).to receive(:select).and_raise(EOFError).ordered
+      allow(source_keyboard).to receive(:read_input_event).and_raise(Errno::ENODEV, "/dev/input/event1")
+      remapper.send(:scroll_pressed_codes).add(Revdev::KEY_S)
+
+      expect(scroll_channel).to receive(:send_scroll).with(false)
+
+      remapper.run
+
+      expect(remapper.send(:scroll_pressed_codes)).to be_empty
+    end
   end
 
   describe "key swap without double conversion" do

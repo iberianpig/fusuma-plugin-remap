@@ -185,6 +185,7 @@ module Fusuma
             end
 
             next if handle_pointer_scroll_press(input_event, remapped)
+            next if handle_pointer_scroll_passthrough(input_event, remapped)
 
             # For modifier remaps, handle specially:
             # Release currently pressed modifiers → Send remapped key → Re-press modifiers
@@ -227,6 +228,7 @@ module Fusuma
             @separated_mappings_cache = {}
             @pressed_key_codes = {}
             @pressed_key_names = {}
+            reset_scroll_keys_after_device_removed
             @source_keyboards = reload_keyboards
           end
         rescue EOFError => e # device is closed
@@ -349,6 +351,25 @@ module Fusuma
           scroll_pressed_codes.add(input_event.code)
           @scroll_channel.send_scroll(true)
           true
+        end
+
+        def handle_pointer_scroll_passthrough(input_event, remapped)
+          return false unless input_event.type == EV_KEY
+          return false if input_event.value == 1
+          return false unless pointer_scroll_remap?(remapped)
+          return false if scroll_pressed_codes.include?(input_event.code)
+
+          output_code = get_or_record_key_code(input_event.code, input_event.code, input_event.value)
+          passthrough_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
+          write_event_with_log(passthrough_event, context: "passthrough")
+          true
+        end
+
+        def reset_scroll_keys_after_device_removed
+          return if scroll_pressed_codes.empty?
+
+          scroll_pressed_codes.clear
+          @scroll_channel.send_scroll(false)
         end
 
         # Record key name on press and return recorded name on release
