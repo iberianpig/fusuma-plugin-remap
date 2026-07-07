@@ -603,19 +603,19 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       end
     end
 
-    context "with POINTER_SCROLL_FINGER remaps" do
-      let(:mapping) { {S: "POINTER_SCROLL_FINGER", D: "pointer_scroll_finger", F: "LEFTCTRL"} }
+    context "with POINTER_SCROLL remaps" do
+      let(:mapping) { {S: "POINTER_SCROLL", D: "pointer_scroll", F: "LEFTCTRL", G: "POINTER_SCROLL_FINGER"} }
 
       it "classifies them as combo remaps so simple remap does not rewrite the key" do
         simple, combo = remapper.send(:separate_mappings, mapping)
 
-        expect(simple).to eq({F: "LEFTCTRL"})
-        expect(combo).to eq({S: "POINTER_SCROLL_FINGER", D: "pointer_scroll_finger"})
+        expect(simple).to eq({F: "LEFTCTRL", G: "POINTER_SCROLL_FINGER"})
+        expect(combo).to eq({S: "POINTER_SCROLL", D: "pointer_scroll"})
       end
     end
   end
 
-  describe "POINTER_SCROLL_FINGER token handling" do
+  describe "POINTER_SCROLL token handling" do
     let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel") }
     let(:remapper) do
       described_class.new(
@@ -630,15 +630,16 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
     let(:release_event) { Revdev::InputEvent.new(nil, Revdev::EV_KEY, Revdev::KEY_S, 0) }
 
     it "recognizes the token case-insensitively" do
-      expect(remapper.send(:pointer_scroll_finger_remap?, "POINTER_SCROLL_FINGER")).to be true
-      expect(remapper.send(:pointer_scroll_finger_remap?, :pointer_scroll_finger)).to be true
-      expect(remapper.send(:pointer_scroll_finger_remap?, "BTN_LEFT")).to be false
+      expect(remapper.send(:pointer_scroll_remap?, "POINTER_SCROLL")).to be true
+      expect(remapper.send(:pointer_scroll_remap?, :pointer_scroll)).to be true
+      expect(remapper.send(:pointer_scroll_remap?, "POINTER_SCROLL_FINGER")).to be false
+      expect(remapper.send(:pointer_scroll_remap?, "BTN_LEFT")).to be false
     end
 
     it "sends scroll on and swallows the token key press" do
       expect(scroll_channel).to receive(:send_scroll).with(true)
 
-      handled = remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL_FINGER")
+      handled = remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL")
 
       expect(handled).to be true
       expect(remapper.send(:scroll_pressed_codes)).to include(Revdev::KEY_S)
@@ -646,7 +647,7 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
     it "swallows repeat events while the token key is held" do
       allow(scroll_channel).to receive(:send_scroll)
-      remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL_FINGER")
+      remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL")
 
       expect(remapper.send(:handle_pressed_pointer_scroll_key, repeat_event)).to be true
     end
@@ -655,7 +656,7 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
       expect(scroll_channel).to receive(:send_scroll).with(true).ordered
       expect(scroll_channel).to receive(:send_scroll).with(false).ordered
 
-      remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL_FINGER")
+      remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL")
 
       expect(remapper.send(:handle_pressed_pointer_scroll_key, release_event)).to be true
       expect(remapper.send(:scroll_pressed_codes)).not_to include(Revdev::KEY_S)

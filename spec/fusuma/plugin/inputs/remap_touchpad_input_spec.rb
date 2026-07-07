@@ -85,9 +85,9 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
         allow(Fusuma::Plugin::Remap::ScrollChannel).to receive(:instance).and_return(scroll_channel)
       end
 
-      it "passes pointer_scroll_enabled when POINTER_SCROLL_FINGER appears in any remap value" do
+      it "passes pointer_scroll_enabled when POINTER_SCROLL appears in any remap value" do
         config = instance_double("Fusuma::Config", keymap: [
-          {remap: {S: "POINTER_SCROLL_FINGER"}},
+          {remap: {S: "POINTER_SCROLL"}},
           {context: {thumbsense: true}, remap: {D: "BTN_LEFT"}}
         ])
         allow(Fusuma::Config).to receive(:instance).and_return(config)
@@ -113,7 +113,7 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
       end
     end
 
-    describe "#pointer_scroll_finger_configured?" do
+    describe "#pointer_scroll_configured?" do
       before do
         allow_any_instance_of(described_class).to receive(:setup_remapper)
       end
@@ -121,11 +121,21 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
       it "detects the token case-insensitively in nested remap values" do
         input = described_class.new
         config = instance_double("Fusuma::Config", keymap: [
-          {remap: {S: ["BTN_LEFT", "pointer_scroll_finger"]}}
+          {remap: {S: ["BTN_LEFT", "pointer_scroll"]}}
         ])
         allow(Fusuma::Config).to receive(:instance).and_return(config)
 
-        expect(input.send(:pointer_scroll_finger_configured?)).to be true
+        expect(input.send(:pointer_scroll_configured?)).to be true
+      end
+
+      it "does not detect the legacy POINTER_SCROLL_FINGER token" do
+        input = described_class.new
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: "POINTER_SCROLL_FINGER"}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+
+        expect(input.send(:pointer_scroll_configured?)).to be false
       end
     end
 

@@ -12,7 +12,7 @@ module Fusuma
       class RemapTouchpadInput < Input
         include CustomProcess
 
-        POINTER_SCROLL_FINGER = "POINTER_SCROLL_FINGER"
+        POINTER_SCROLL = "POINTER_SCROLL"
 
         def config_param_types
           {
@@ -54,7 +54,7 @@ module Fusuma
 
         def setup_remapper
           scroll_channel = Remap::ScrollChannel.instance
-          pointer_scroll_enabled = pointer_scroll_finger_configured?
+          pointer_scroll_enabled = pointer_scroll_configured?
 
           # physical touchpad input event
           @fusuma_reader, fusuma_writer = IO.pipe
@@ -86,24 +86,24 @@ module Fusuma
           fusuma_writer.close
         end
 
-        def pointer_scroll_finger_configured?
+        def pointer_scroll_configured?
           keymap = Fusuma::Config.instance.keymap
           Array(keymap).any? do |section|
             remap = section[:remap] || section["remap"]
-            contains_pointer_scroll_finger?(remap)
+            contains_pointer_scroll?(remap)
           end
         rescue
           false
         end
 
-        def contains_pointer_scroll_finger?(value)
+        def contains_pointer_scroll?(value)
           case value
           when Hash
-            value.values.any? { |nested| contains_pointer_scroll_finger?(nested) }
+            value.values.any? { |nested| contains_pointer_scroll?(nested) }
           when Array
-            value.any? { |nested| contains_pointer_scroll_finger?(nested) }
+            value.any? { |nested| contains_pointer_scroll?(nested) }
           when String, Symbol
-            value.to_s.upcase == POINTER_SCROLL_FINGER
+            value.to_s.upcase == POINTER_SCROLL
           else
             false
           end

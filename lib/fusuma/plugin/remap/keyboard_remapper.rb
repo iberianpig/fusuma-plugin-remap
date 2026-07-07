@@ -18,7 +18,7 @@ module Fusuma
         VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
         DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
         DEVICE_CHECK_INTERVAL = 3 # seconds - interval for checking new devices
-        POINTER_SCROLL_FINGER = "POINTER_SCROLL_FINGER".freeze
+        POINTER_SCROLL = "POINTER_SCROLL".freeze
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -321,8 +321,8 @@ module Fusuma
           @scroll_pressed_codes ||= Set.new
         end
 
-        def pointer_scroll_finger_remap?(remapped)
-          remapped.to_s.upcase == POINTER_SCROLL_FINGER
+        def pointer_scroll_remap?(remapped)
+          remapped.to_s.upcase == POINTER_SCROLL
         end
 
         def handle_pressed_pointer_scroll_key(input_event)
@@ -344,7 +344,7 @@ module Fusuma
         def handle_pointer_scroll_press(input_event, remapped)
           return false unless input_event.type == EV_KEY
           return false unless input_event.value == 1
-          return false unless pointer_scroll_finger_remap?(remapped)
+          return false unless pointer_scroll_remap?(remapped)
 
           scroll_pressed_codes.add(input_event.code)
           @scroll_channel.send_scroll(true)
@@ -615,7 +615,7 @@ module Fusuma
 
             if key_str.include?("+")
               combo_remap[key] = value
-            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+") || pointer_scroll_finger_remap?(value)
+            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+") || pointer_scroll_remap?(value)
               combo_remap[key] = value
             else
               simple_remap[key] = value
