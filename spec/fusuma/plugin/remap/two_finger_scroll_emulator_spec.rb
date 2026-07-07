@@ -99,6 +99,27 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
     end
 
+    context "when the device has no free multitouch slot" do
+      before do
+        allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_SLOT).and_return(absmin: 0, absmax: 0)
+      end
+
+      it "passes motion through without injecting nil-valued synthetic events" do
+        emulator.set_scroll_mode(true)
+        touch_begin
+
+        output = first_scroll_motion
+
+        expect(tuples(output)).to eq([
+          [Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 450],
+          [Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 520],
+          [Revdev::EV_SYN, Revdev::SYN_REPORT, 0]
+        ])
+        expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+        expect(output.map(&:value)).not_to include(nil)
+      end
+    end
+
     it "mirrors subsequent real finger movement to the synthetic slot" do
       emulator.set_scroll_mode(true)
       touch_begin

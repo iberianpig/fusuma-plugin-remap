@@ -110,7 +110,8 @@ module Fusuma
           if @scroll_mode
             real_slot = single_real_slot
             if !synthetic_active? && count == 1 && motion_slots.include?(real_slot)
-              activate_synthetic(real_slot)
+              return frame unless activate_synthetic(real_slot)
+
               return frame_with_synthetic_touch(frame, real_slot, include_tracking_id: true)
             end
 
@@ -145,15 +146,19 @@ module Fusuma
         end
 
         def activate_synthetic(real_slot)
+          synthetic_slot = available_synthetic_slot
+          return false unless synthetic_slot
+
           @tracking_sequence += 1
           real_x = @slots[real_slot][:x]
           offset = (real_x > ((@x_min + @x_max) / 2)) ? -@x_offset_size : @x_offset_size
 
           @synthetic = {
-            slot: available_synthetic_slot,
+            slot: synthetic_slot,
             tracking_id: SYNTHETIC_TRACKING_ID_BASE + @tracking_sequence,
             offset: offset
           }
+          true
         end
 
         def available_synthetic_slot
