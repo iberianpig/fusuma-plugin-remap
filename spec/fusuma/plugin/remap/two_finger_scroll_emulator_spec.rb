@@ -38,6 +38,17 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
     events.map { |input_event| [input_event.type, input_event.code, input_event.value] }
   end
 
+  def tracking_ids_by_slot(events)
+    current_slot = 0
+    events.each_with_object(Hash.new { |hash, slot| hash[slot] = [] }) do |input_event, tracking_ids|
+      if input_event.type == Revdev::EV_ABS && input_event.code == Revdev::ABS_MT_SLOT
+        current_slot = input_event.value
+      elsif input_event.type == Revdev::EV_ABS && input_event.code == Revdev::ABS_MT_TRACKING_ID
+        tracking_ids[current_slot] << input_event.value
+      end
+    end
+  end
+
   def touch_begin(x: 400, y: 500, tracking_id: 10, slot: 0)
     process_frame(
       abs(Revdev::ABS_MT_SLOT, slot),
@@ -99,6 +110,35 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
     end
 
+    it "keeps slot coordinates across touch restarts and ignores begin-frame motion" do
+      emulator.set_scroll_mode(true)
+      touch_begin(x: 450, y: 500)
+      first_scroll_motion(x: 450, y: 520)
+      touch_end
+
+      begin_output = process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 20),
+        abs(Revdev::ABS_MT_POSITION_Y, 700),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+
+      expect(tuples(begin_output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(begin_output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+
+      motion_output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_Y, 720),
+        syn
+      )
+
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 600])
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 720])
+      expect(tuples(motion_output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
     context "when the device has no free multitouch slot" do
       before do
         allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_SLOT).and_return(absmin: 0, absmax: 0)
@@ -118,6 +158,27 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
         expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
         expect(output.map(&:value)).not_to include(nil)
       end
+    end
+
+    it "passes motion through when the real slot has incomplete coordinates" do
+      emulator.set_scroll_mode(true)
+      process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_POSITION_X, 450),
+        syn
+      )
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 460),
+        syn
+      )
+
+      expect(tuples(output)).to eq([
+        [Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 460],
+        [Revdev::EV_SYN, Revdev::SYN_REPORT, 0]
+      ])
+      expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
     it "mirrors subsequent real finger movement to the synthetic slot" do
@@ -178,7 +239,8 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       )
 
       expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
-      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_TRACKING_ID, -1])
+      expect(tracking_ids_by_slot(output)[synthetic_slot]).to include(11)
+      expect(tracking_ids_by_slot(output)[synthetic_slot]).not_to include(-1)
       expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
@@ -233,6 +295,36 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_FINGER, 1])
       expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOUCH, 1])
       expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
+    it "flushes a buffered partial frame before disabling scroll mode" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      buffered_events = [
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, -1)
+      ]
+      buffered_events.each { |input_event| expect(emulator.process(input_event)).to eq([]) }
+
+      output = emulator.set_scroll_mode(false)
+
+      expect(tuples(output).first(2)).to eq(tuples(buffered_events))
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_TRACKING_ID, -1])
+
+      remaining_output = process_frame(
+        key(Revdev::BTN_TOUCH, 0),
+        key(Revdev::BTN_TOOL_FINGER, 0),
+        syn
+      )
+
+      expect(tuples(remaining_output)).to eq([
+        [Revdev::EV_KEY, Revdev::BTN_TOUCH, 0],
+        [Revdev::EV_KEY, Revdev::BTN_TOOL_FINGER, 0],
+        [Revdev::EV_SYN, Revdev::SYN_REPORT, 0]
+      ])
     end
   end
 end

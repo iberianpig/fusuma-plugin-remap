@@ -26,7 +26,7 @@ module Fusuma
           @y_min, @y_max = axis_range(device, ABS_MT_POSITION_Y, fallback_min: 0, fallback_max: 1000)
           @x_offset_size = ((@x_max - @x_min) * 0.15).round
 
-          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil} }
+          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil, new_touch: false} }
           @current_slot = @slot_min
           @frame_events = []
           @frame_motion_slots = Set.new
@@ -39,10 +39,11 @@ module Fusuma
           enabled = !!enabled
           return [] if @scroll_mode == enabled
 
+          buffered_frame = drain_frame_events
           @scroll_mode = enabled
-          return [] if enabled
+          return buffered_frame if enabled
 
-          release_synthetic_frame(real_finger_count)
+          buffered_frame + release_synthetic_frame(real_finger_count)
         end
 
         def process(input_event)
@@ -71,6 +72,8 @@ module Fusuma
           case input_event.type
           when EV_ABS
             parse_abs_event(input_event)
+          when EV_SYN
+            clear_new_touch_flags if syn_report?(input_event)
           end
         end
 
@@ -80,7 +83,9 @@ module Fusuma
             @current_slot = input_event.value
             @slots[@current_slot]
           when ABS_MT_TRACKING_ID
-            @slots[@current_slot] = {tracking_id: input_event.value, x: nil, y: nil}
+            slot_state = @slots[@current_slot]
+            slot_state[:tracking_id] = input_event.value
+            slot_state[:new_touch] = input_event.value != -1
           when ABS_MT_POSITION_X
             record_position(:x, input_event.value)
           when ABS_MT_POSITION_Y
@@ -90,10 +95,21 @@ module Fusuma
 
         def record_position(axis, value)
           slot_state = @slots[@current_slot]
-          if real_slot_active?(@current_slot) && !slot_state[axis].nil? && slot_state[axis] != value
+          if real_slot_active?(@current_slot) && !slot_state[:new_touch] && !slot_state[axis].nil? && slot_state[axis] != value
             @frame_motion_slots.add(@current_slot)
           end
           slot_state[axis] = value
+        end
+
+        def clear_new_touch_flags
+          @slots.each_value { |slot_state| slot_state[:new_touch] = false }
+        end
+
+        def drain_frame_events
+          frame = @frame_events
+          @frame_events = []
+          @frame_motion_slots = Set.new
+          frame
         end
 
         def flush_frame
@@ -149,8 +165,11 @@ module Fusuma
           synthetic_slot = available_synthetic_slot
           return false unless synthetic_slot
 
+          real = @slots[real_slot]
+          return false if real[:x].nil? || real[:y].nil?
+
           @tracking_sequence += 1
-          real_x = @slots[real_slot][:x]
+          real_x = real[:x]
           offset = (real_x > ((@x_min + @x_max) / 2)) ? -@x_offset_size : @x_offset_size
 
           @synthetic = {
@@ -203,10 +222,8 @@ module Fusuma
           synthetic_slot = @synthetic[:slot]
           @synthetic = nil
 
-          events = [
-            input_event(EV_ABS, ABS_MT_SLOT, synthetic_slot),
-            input_event(EV_ABS, ABS_MT_TRACKING_ID, -1)
-          ]
+          events = [input_event(EV_ABS, ABS_MT_SLOT, synthetic_slot)]
+          events << input_event(EV_ABS, ABS_MT_TRACKING_ID, -1) unless real_slot_active?(synthetic_slot)
           events.concat(tool_events(real_count))
           events << input_event(EV_KEY, BTN_TOUCH, real_count.positive? ? 1 : 0)
           events << input_event(EV_ABS, ABS_MT_SLOT, restore_slot) unless restore_slot.nil?
