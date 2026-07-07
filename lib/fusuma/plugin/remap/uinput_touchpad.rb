@@ -36,7 +36,12 @@ class UinputTouchpad < Ruinput::UinputDevice
 
     @file.syswrite uud.to_byte_string
 
-    set_supported_events(supported)
+    if supported[:events].empty?
+      Fusuma::MultiLogger.warn("Failed to probe touchpad capabilities; falling back to static event setup")
+      set_all_events
+    else
+      set_supported_events(supported)
+    end
 
     @file.ioctl UI_DEV_CREATE, nil
     @is_created = true

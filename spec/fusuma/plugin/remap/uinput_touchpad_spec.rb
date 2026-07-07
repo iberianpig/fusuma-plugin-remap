@@ -80,5 +80,21 @@ RSpec.describe UinputTouchpad do
       expect(ioctls).to include([Ruinput::UI_SET_PROPBIT, Revdev::INPUT_PROP_POINTER])
       expect(ioctls).to include([Ruinput::UI_SET_PROPBIT, Revdev::INPUT_PROP_BUTTONPAD])
     end
+
+    it "falls back to static event setup when capability probing returns no events" do
+      allow(uinput).to receive(:supported_capabilities).and_return(
+        events: [],
+        keys: [],
+        abs: [],
+        rels: [],
+        mscs: [],
+        props: []
+      )
+
+      expect(Fusuma::MultiLogger).to receive(:warn).with(/Failed to probe touchpad capabilities/)
+      expect(uinput).to receive(:set_all_events)
+
+      uinput.create_from_device(name: "fusuma_virtual_touchpad", device: source_device)
+    end
   end
 end
