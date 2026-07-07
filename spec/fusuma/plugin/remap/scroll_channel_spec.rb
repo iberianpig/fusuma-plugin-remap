@@ -30,11 +30,25 @@ RSpec.describe Fusuma::Plugin::Remap::ScrollChannel do
       expect(channel.receive).to be false
     end
 
-    it "returns nil when the reader reaches EOF" do
+    it "returns :closed when the reader reaches EOF" do
       channel = build_channel
       channel.writer.close
 
-      expect(channel.receive).to be_nil
+      expect(channel.receive).to eq(:closed)
+    end
+
+    it "does not update the last state when non-blocking write raises EAGAIN" do
+      channel = build_channel
+      writer = instance_double("IO")
+      channel.instance_variable_set(:@writer, writer)
+
+      allow(writer).to receive(:write_nonblock).and_raise(Errno::EAGAIN)
+
+      channel.send_scroll(true)
+      channel.send_scroll(true)
+
+      expect(writer).to have_received(:write_nonblock).twice
+      expect(channel.instance_variable_get(:@last_scroll)).to be_nil
     end
 
     it "returns without blocking or raising when the pipe is full and unread" do

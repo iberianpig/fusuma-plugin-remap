@@ -20,15 +20,15 @@ module Fusuma
           enabled = !!enabled
           return if @last_scroll == enabled
 
-          @last_scroll = enabled
           @writer.write_nonblock({scroll: enabled}.to_json + "\n")
+          @last_scroll = enabled
         rescue IO::WaitWritable, Errno::EAGAIN, IOError, Errno::EPIPE
           nil
         end
 
         def receive
           line = @reader.gets
-          return unless line
+          return :closed unless line
 
           data = JSON.parse(line)
           return unless data.is_a?(Hash)
