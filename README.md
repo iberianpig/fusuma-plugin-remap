@@ -37,6 +37,27 @@ $ sudo udevadm control --reload-rules && sudo udevadm trigger
 $ sudo gem install fusuma-plugin-remap
 ```
 
+### Optional native keyboard remapper
+
+Keyboard remapping can run through the experimental Spinel native binary,
+`fusuma-remap-keyboard`. If the binary is not present, the plugin falls back to
+the existing fork-based Ruby remapper.
+
+Build it from the repository root:
+
+```sh
+$ make -C native
+```
+
+The Fusuma input plugin looks for the binary in this order:
+
+1. `FUSUMA_REMAP_KEYBOARD_BIN`
+2. `native/build/fusuma-remap-keyboard` in this repository
+3. `fusuma-remap-keyboard` on `PATH`
+
+The native remapper still requires access to `/dev/uinput` and matching
+`/dev/input/event*` devices, just like the Ruby fallback.
+
 ## Properties
 
 ### Remap
