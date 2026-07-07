@@ -38,22 +38,32 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
     events.map { |input_event| [input_event.type, input_event.code, input_event.value] }
   end
 
-  def touch_begin
+  def touch_begin(x: 400, y: 500, tracking_id: 10, slot: 0)
     process_frame(
-      abs(Revdev::ABS_MT_SLOT, 0),
-      abs(Revdev::ABS_MT_TRACKING_ID, 10),
-      abs(Revdev::ABS_MT_POSITION_X, 400),
-      abs(Revdev::ABS_MT_POSITION_Y, 500),
+      abs(Revdev::ABS_MT_SLOT, slot),
+      abs(Revdev::ABS_MT_TRACKING_ID, tracking_id),
+      abs(Revdev::ABS_MT_POSITION_X, x),
+      abs(Revdev::ABS_MT_POSITION_Y, y),
       key(Revdev::BTN_TOUCH, 1),
       key(Revdev::BTN_TOOL_FINGER, 1),
       syn
     )
   end
 
-  def first_scroll_motion
+  def touch_end(slot: 0)
     process_frame(
-      abs(Revdev::ABS_MT_POSITION_X, 450),
-      abs(Revdev::ABS_MT_POSITION_Y, 520),
+      abs(Revdev::ABS_MT_SLOT, slot),
+      abs(Revdev::ABS_MT_TRACKING_ID, -1),
+      key(Revdev::BTN_TOUCH, 0),
+      key(Revdev::BTN_TOOL_FINGER, 0),
+      syn
+    )
+  end
+
+  def first_scroll_motion(x: 450, y: 520)
+    process_frame(
+      abs(Revdev::ABS_MT_POSITION_X, x),
+      abs(Revdev::ABS_MT_POSITION_Y, y),
       syn
     )
   end
@@ -151,19 +161,32 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
-    it "clears the scroll session on touch end while the key remains pressed" do
+    it "keeps scroll mode across touch restarts while the key remains pressed" do
       emulator.set_scroll_mode(true)
       touch_begin
       first_scroll_motion
 
-      process_frame(
-        abs(Revdev::ABS_MT_TRACKING_ID, -1),
-        key(Revdev::BTN_TOUCH, 0),
-        key(Revdev::BTN_TOOL_FINGER, 0),
-        syn
-      )
+      touch_end
 
+      begin_output = touch_begin(x: 100, y: 200, tracking_id: 20)
+
+      expect(tuples(begin_output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(begin_output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+
+      motion_output = first_scroll_motion(x: 130, y: 220)
+
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(motion_output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    it "does not restart scrolling after scroll mode is disabled" do
+      emulator.set_scroll_mode(true)
       touch_begin
+      first_scroll_motion
+      touch_end
+
+      emulator.set_scroll_mode(false)
+      touch_begin(x: 100, y: 200, tracking_id: 20)
       output = first_scroll_motion
 
       expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])

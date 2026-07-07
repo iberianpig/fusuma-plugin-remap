@@ -31,7 +31,6 @@ module Fusuma
           @frame_events = []
           @frame_motion_slots = Set.new
           @scroll_mode = false
-          @scroll_session_cancelled = false
           @synthetic = nil
           @tracking_sequence = 0
         end
@@ -41,7 +40,6 @@ module Fusuma
           return [] if @scroll_mode == enabled
 
           @scroll_mode = enabled
-          @scroll_session_cancelled = false
           return [] if enabled
 
           release_synthetic_frame(real_finger_count)
@@ -82,7 +80,7 @@ module Fusuma
             @current_slot = input_event.value
             @slots[@current_slot]
           when ABS_MT_TRACKING_ID
-            @slots[@current_slot][:tracking_id] = input_event.value
+            @slots[@current_slot] = {tracking_id: input_event.value, x: nil, y: nil}
           when ABS_MT_POSITION_X
             record_position(:x, input_event.value)
           when ABS_MT_POSITION_Y
@@ -106,11 +104,10 @@ module Fusuma
 
           count = real_finger_count
           if synthetic_active? && (count.zero? || count >= 2)
-            @scroll_session_cancelled = true if count.zero?
             return frame_with_synthetic_release(frame, count)
           end
 
-          if @scroll_mode && !@scroll_session_cancelled
+          if @scroll_mode
             real_slot = single_real_slot
             if !synthetic_active? && count == 1 && motion_slots.include?(real_slot)
               activate_synthetic(real_slot)
@@ -122,7 +119,6 @@ module Fusuma
             end
           end
 
-          @scroll_session_cancelled = true if @scroll_mode && count.zero?
           frame
         end
 

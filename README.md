@@ -141,7 +141,7 @@ remap:
   S: POINTER_SCROLL_FINGER
 ```
 
-With this configuration, holding <kbd>S</kbd> while touching the touchpad makes one-finger movement scroll instead of moving the pointer. Releasing <kbd>S</kbd> or ending the touch returns the touchpad to normal behavior.
+With this configuration, holding <kbd>S</kbd> while touching the touchpad makes one-finger movement scroll instead of moving the pointer. Releasing <kbd>S</kbd> returns the touchpad to normal pointer movement. While <kbd>S</kbd> is held, lifting your finger and touching the touchpad again continues scrolling on the next movement.
 
 #### Device Context
 
