@@ -238,6 +238,8 @@ module Fusuma
         private
 
         def reload_keyboards
+          ungrab_keyboards(@source_keyboards) if @source_keyboards
+
           source_keyboards = KeyboardSelector.new(@config[:keyboard_name_patterns]).select
 
           MultiLogger.info("Reload keyboards: #{source_keyboards.map(&:device_name)}")
@@ -248,6 +250,25 @@ module Fusuma
         rescue => e
           MultiLogger.error "Failed to reload keyboards: #{e.message}"
           MultiLogger.error e.backtrace.join("\n")
+        end
+
+        # Release evdev grab on previously held keyboards before reloading.
+        # Without this, the old EventDevice instance keeps the kernel grab,
+        # which makes re-grab fail with EBUSY and leaves the underlying
+        # device unresponsive until the fusuma process exits.
+        def ungrab_keyboards(keyboards)
+          keyboards.each do |kbd|
+            begin
+              kbd.ungrab
+            rescue Errno::EINVAL, Errno::ENODEV
+              # already ungrabbed or device removed
+            end
+            begin
+              kbd.file.close
+            rescue IOError
+              # already closed
+            end
+          end
         end
 
         # Get mapping for specific device from cache or LayerManager
