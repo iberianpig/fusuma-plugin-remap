@@ -31,12 +31,17 @@ class UinputTouchpad < Ruinput::UinputDevice
       absmin: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:absmin] } },
       absfuzz: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:absfuzz] } },
       absflat: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:absflat] } },
-      resolution: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:resolution] || v[:absresolution] || 0 } }
+      resolution: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:resolution] || 0 } }
     })
 
     @file.syswrite uud.to_byte_string
 
-    set_supported_events(supported)
+    if supported[:events].empty?
+      Fusuma::MultiLogger.warn("Failed to probe touchpad capabilities; falling back to static event setup")
+      set_all_events
+    else
+      set_supported_events(supported)
+    end
 
     @file.ioctl UI_DEV_CREATE, nil
     @is_created = true
@@ -167,7 +172,7 @@ class UinputTouchpad < Ruinput::UinputDevice
       abs: supported_codes(device, eviocgbit(Revdev::EV_ABS, bit_bytes(Revdev::ABS_CNT)), Revdev::ABS_CNT),
       rels: supported_codes(device, eviocgbit(Revdev::EV_REL, bit_bytes(Revdev::REL_CNT)), Revdev::REL_CNT),
       mscs: supported_codes(device, eviocgbit(Revdev::EV_MSC, bit_bytes(Revdev::MSC_CNT)), Revdev::MSC_CNT),
-      props: supported_codes(device, eviocgprop(bit_bytes(Revdev::INPUT_PROP_CNT)), Revdev::INPUT_PROP_CNT)
+      props: supported_codes(device, Revdev::EVIOCGPROP, Revdev::INPUT_PROP_CNT)
     }
   end
 
@@ -186,10 +191,6 @@ class UinputTouchpad < Ruinput::UinputDevice
 
   def eviocgbit(event_type, length)
     ioc_read("E", 0x20 + event_type, length)
-  end
-
-  def eviocgprop(length)
-    ioc_read("E", 0x09, length)
   end
 
   def ioc_read(type, number, size)

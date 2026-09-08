@@ -10,9 +10,13 @@ module Fusuma
       # Unifies TouchpadSelector implementations across the codebase
       class DeviceSelector
         POLL_INTERVAL = 3 # seconds
+        # Single source of truth for virtual device names; the remappers and the
+        # self-exclusion filter below must always agree on these
+        VIRTUAL_TOUCHPAD_NAME = "fusuma_virtual_touchpad"
+        VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
         VIRTUAL_DEVICE_NAMES = [
-          "fusuma_virtual_touchpad",
-          "fusuma_virtual_keyboard"
+          VIRTUAL_TOUCHPAD_NAME,
+          VIRTUAL_KEYBOARD_NAME
         ].freeze
 
         # @param name_patterns [Array, String, nil] patterns for device names

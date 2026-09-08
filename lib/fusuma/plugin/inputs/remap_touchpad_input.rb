@@ -12,8 +12,6 @@ module Fusuma
       class RemapTouchpadInput < Input
         include CustomProcess
 
-        POINTER_SCROLL = "POINTER_SCROLL"
-
         def config_param_types
           {
             touchpad_name_patterns: [Array, String]
@@ -62,6 +60,7 @@ module Fusuma
 
           fork do
             # layer_manager.writer.close
+            scroll_channel.writer.close
             @fusuma_reader.close
 
             # DeviceSelector waits until touchpad is found (like KeyboardSelector)
@@ -92,7 +91,8 @@ module Fusuma
             remap = section[:remap] || section["remap"]
             contains_pointer_scroll?(remap)
           end
-        rescue
+        rescue => e
+          MultiLogger.warn("Failed to detect POINTER_SCROLL config: #{e.message}")
           false
         end
 
@@ -102,10 +102,8 @@ module Fusuma
             value.values.any? { |nested| contains_pointer_scroll?(nested) }
           when Array
             value.any? { |nested| contains_pointer_scroll?(nested) }
-          when String, Symbol
-            value.to_s.upcase == POINTER_SCROLL
           else
-            false
+            Remap::ScrollChannel.pointer_scroll_value?(value)
           end
         end
       end

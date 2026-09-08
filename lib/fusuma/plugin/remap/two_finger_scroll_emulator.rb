@@ -27,7 +27,7 @@ module Fusuma
           @y_min, @y_max = axis_range(device, ABS_MT_POSITION_Y, fallback_min: 0, fallback_max: 1000)
           @x_offset_size = ((@x_max - @x_min) * 0.15).round
 
-          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil, fresh: false} }
+          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil, new_touch: false} }
           @current_slot = @slot_min
           @frame_events = []
           @frame_motion_slots = Set.new
@@ -103,7 +103,7 @@ module Fusuma
           when EV_ABS
             parse_abs_event(input_event)
           when EV_SYN
-            clear_fresh_flags if syn_report?(input_event)
+            clear_new_touch_flags if syn_report?(input_event)
           end
         end
 
@@ -111,18 +111,13 @@ module Fusuma
           case input_event.code
           when ABS_MT_SLOT
             @current_slot = input_event.value
-            @slots[@current_slot]
           when ABS_MT_TRACKING_ID
             slot_state = @slots[@current_slot]
-            # evdev suppresses ABS events with unchanged values, so a new touch
-            # landing on the previous coordinates never resends X/Y; carry the
-            # last known position over instead of resetting it to nil
-            @slots[@current_slot] = {
-              tracking_id: input_event.value,
-              x: slot_state[:x],
-              y: slot_state[:y],
-              fresh: true
-            }
+            # x/y are kept across tracking resets: evdev suppresses ABS events
+            # with unchanged values, so a new touch landing on the previous
+            # coordinates never resends X/Y
+            slot_state[:tracking_id] = input_event.value
+            slot_state[:new_touch] = input_event.value != -1
           when ABS_MT_POSITION_X
             record_position(:x, input_event.value)
           when ABS_MT_POSITION_Y
@@ -132,33 +127,40 @@ module Fusuma
 
         def record_position(axis, value)
           slot_state = @slots[@current_slot]
-          # :fresh excludes the touch-down frame: a re-touch away from the
+          # :new_touch excludes the touch-down frame: a re-touch away from the
           # carried-over position is a new touch, not finger motion
-          if real_slot_active?(@current_slot) && !slot_state[:fresh] && !slot_state[axis].nil? && slot_state[axis] != value
+          if real_slot_active?(@current_slot) && !slot_state[:new_touch] && !slot_state[axis].nil? && slot_state[axis] != value
             @frame_motion_slots.add(@current_slot)
           end
           slot_state[axis] = value
         end
 
-        def clear_fresh_flags
-          @slots.each_value { |slot_state| slot_state[:fresh] = false }
+        def clear_new_touch_flags
+          @slots.each_value { |slot_state| slot_state[:new_touch] = false }
         end
 
-        def flush_frame
+        def drain_frame_events
           frame = @frame_events
           motion_slots = @frame_motion_slots
           @frame_events = []
           @frame_motion_slots = Set.new
+          [frame, motion_slots]
+        end
 
-          count = real_finger_count
+        def flush_frame
+          frame, motion_slots = drain_frame_events
+
+          active_slots = real_slots
+          count = active_slots.size
           if synthetic_active? && (count.zero? || count >= 2)
             return frame_with_synthetic_release(frame, count)
           end
 
           if @scroll_mode
-            real_slot = single_real_slot
+            real_slot = (count == 1) ? active_slots.first : nil
             if !synthetic_active? && count == 1 && motion_slots.include?(real_slot)
-              activate_synthetic(real_slot)
+              return frame unless activate_synthetic(real_slot)
+
               return frame_with_synthetic_touch(frame, real_slot, include_tracking_id: true)
             end
 
@@ -193,49 +195,56 @@ module Fusuma
         end
 
         def activate_synthetic(real_slot)
-          real_x = @slots[real_slot][:x]
-          real_y = @slots[real_slot][:y]
+          synthetic_slot = available_synthetic_slot
+          return false unless synthetic_slot
+
+          real = @slots[real_slot]
           # Position can still be unknown right after startup (before the first
           # X/Y events ever arrive); wait instead of guessing
-          return if real_x.nil? || real_y.nil?
+          return false if real[:x].nil? || real[:y].nil?
 
           @tracking_sequence += 1
+          real_x = real[:x]
+          real_y = real[:y]
           offset = (real_x > ((@x_min + @x_max) / 2)) ? -@x_offset_size : @x_offset_size
 
           @synthetic = {
-            slot: available_synthetic_slot,
+            slot: synthetic_slot,
             tracking_id: SYNTHETIC_TRACKING_ID_BASE + @tracking_sequence,
             offset: offset,
-            last_x: clamp(real_x + offset, @x_min, @x_max),
-            last_y: clamp(real_y, @y_min, @y_max)
+            last_x: (real_x + offset).clamp(@x_min, @x_max),
+            last_y: real_y.clamp(@y_min, @y_max)
           }
+          true
         end
 
         def available_synthetic_slot
-          real = real_slots.to_set
-          (@slot_min..@slot_max).to_a.reverse.find { |slot| !real.include?(slot) }
+          @slot_max.downto(@slot_min).find { |slot| !real_slot_active?(slot) }
         end
 
         def frame_with_synthetic_touch(frame, real_slot, include_tracking_id:)
           return frame unless real_slot && @synthetic
 
-          without_syn = frame_without_syn_or_tool_buttons(frame)
           synthetic_x, synthetic_y = synthetic_position_for(real_slot)
 
-          events = without_syn.dup
+          events = frame_without_syn_or_tool_buttons(frame)
           events << input_event(EV_ABS, ABS_MT_SLOT, @synthetic[:slot])
           events << input_event(EV_ABS, ABS_MT_TRACKING_ID, @synthetic[:tracking_id]) if include_tracking_id
           events << input_event(EV_ABS, ABS_MT_POSITION_X, synthetic_x)
           events << input_event(EV_ABS, ABS_MT_POSITION_Y, synthetic_y)
-          events.concat(tool_events(2))
-          events << input_event(EV_KEY, BTN_TOUCH, 1) unless frame_has_btn_touch?(frame)
+          if include_tracking_id
+            # Tool/touch state only changes when the synthetic finger appears;
+            # the kernel keeps key state between frames, so mirror frames need no re-emission
+            events.concat(tool_events(2))
+            events << input_event(EV_KEY, BTN_TOUCH, 1) unless frame_has_btn_touch?(frame)
+          end
           events << input_event(EV_ABS, ABS_MT_SLOT, real_slot)
           events << syn_event
           events
         end
 
         def frame_with_synthetic_release(frame, real_count)
-          events = frame_without_syn_or_tool_buttons(frame).dup
+          events = frame_without_syn_or_tool_buttons(frame)
           events.concat(release_synthetic_events(real_count, restore_slot: single_real_slot || @current_slot))
           events << syn_event
           events
@@ -253,10 +262,8 @@ module Fusuma
           synthetic_slot = @synthetic[:slot]
           @synthetic = nil
 
-          events = [
-            input_event(EV_ABS, ABS_MT_SLOT, synthetic_slot),
-            input_event(EV_ABS, ABS_MT_TRACKING_ID, -1)
-          ]
+          events = [input_event(EV_ABS, ABS_MT_SLOT, synthetic_slot)]
+          events << input_event(EV_ABS, ABS_MT_TRACKING_ID, -1) unless real_slot_active?(synthetic_slot)
           events.concat(tool_events(real_count))
           events << input_event(EV_KEY, BTN_TOUCH, real_count.positive? ? 1 : 0)
           events << input_event(EV_ABS, ABS_MT_SLOT, restore_slot) unless restore_slot.nil?
@@ -265,13 +272,10 @@ module Fusuma
 
         def synthetic_position_for(real_slot)
           real = @slots[real_slot]
-          @synthetic[:last_x] = clamp(real[:x] + @synthetic[:offset], @x_min, @x_max) if real[:x]
-          @synthetic[:last_y] = clamp(real[:y], @y_min, @y_max) if real[:y]
+          # Fall back to the last emitted position if an axis is unknown
+          @synthetic[:last_x] = (real[:x] + @synthetic[:offset]).clamp(@x_min, @x_max) if real[:x]
+          @synthetic[:last_y] = real[:y].clamp(@y_min, @y_max) if real[:y]
           [@synthetic[:last_x], @synthetic[:last_y]]
-        end
-
-        def clamp(value, min, max)
-          value.clamp(min, max)
         end
 
         def tool_events(finger_count)

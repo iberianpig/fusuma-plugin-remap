@@ -38,7 +38,15 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapKeyboardInput do
         writer: double(close: nil)
       )
     end
-    let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel") }
+    let(:scroll_reader) { instance_double("IO", close: nil) }
+    let(:scroll_writer) { instance_double("IO", close: nil) }
+    let(:scroll_channel) do
+      instance_double(
+        "Fusuma::Plugin::Remap::ScrollChannel",
+        reader: scroll_reader,
+        writer: scroll_writer
+      )
+    end
 
     before do
       allow_any_instance_of(described_class).to receive(:fork).and_yield
@@ -52,6 +60,14 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapKeyboardInput do
       expect(Fusuma::Plugin::Remap::KeyboardRemapper).to receive(:new).with(
         hash_including(scroll_channel: scroll_channel)
       ).and_return(double(run: nil))
+
+      described_class.new
+    end
+
+    it "closes the unused scroll channel reader inside the child fork" do
+      allow(Fusuma::Plugin::Remap::KeyboardRemapper).to receive(:new).and_return(double(run: nil))
+
+      expect(scroll_reader).to receive(:close)
 
       described_class.new
     end
