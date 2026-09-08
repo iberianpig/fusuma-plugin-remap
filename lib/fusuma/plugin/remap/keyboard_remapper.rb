@@ -42,6 +42,10 @@ module Fusuma
         end
 
         def run
+          # stdout is block-buffered when piped (e.g. to journald) and this
+          # process logs rarely; flush per write so logs appear immediately
+          $stdout.sync = true
+
           create_virtual_keyboard
           @source_keyboards = reload_keyboards
 

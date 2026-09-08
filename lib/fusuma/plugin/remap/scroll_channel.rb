@@ -2,6 +2,7 @@
 
 require "json"
 require "singleton"
+require "fusuma/multi_logger"
 
 module Fusuma
   module Plugin
@@ -20,9 +21,14 @@ module Fusuma
           enabled = !!enabled
           return if @last_scroll == enabled
 
+          previous = @last_scroll
           @last_scroll = enabled
+          MultiLogger.debug("ScrollChannel#send_scroll: #{enabled}")
           @writer.write_nonblock({scroll: enabled}.to_json + "\n")
-        rescue IO::WaitWritable, Errno::EAGAIN, IOError, Errno::EPIPE
+        rescue IO::WaitWritable, Errno::EAGAIN, IOError, Errno::EPIPE => e
+          # Roll back so the next state change is not skipped as a duplicate
+          @last_scroll = previous
+          MultiLogger.warn("ScrollChannel#send_scroll failed: #{e.class}: #{e.message}")
           nil
         end
 
