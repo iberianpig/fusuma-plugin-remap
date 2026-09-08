@@ -2,6 +2,7 @@
 
 require "revdev"
 require "set"
+require "fusuma/multi_logger"
 
 module Fusuma
   module Plugin
@@ -26,36 +27,46 @@ module Fusuma
           @y_min, @y_max = axis_range(device, ABS_MT_POSITION_Y, fallback_min: 0, fallback_max: 1000)
           @x_offset_size = ((@x_max - @x_min) * 0.15).round
 
-          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil} }
+          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil, fresh: false} }
           @current_slot = @slot_min
           @frame_events = []
           @frame_motion_slots = Set.new
           @scroll_mode = false
           @synthetic = nil
           @tracking_sequence = 0
+          @in_frame = false
+          @pending_scroll_mode = nil
         end
 
         def set_scroll_mode(enabled)
           enabled = !!enabled
-          return [] if @scroll_mode == enabled
+          target = @pending_scroll_mode.nil? ? @scroll_mode : @pending_scroll_mode
+          return [] if target == enabled
 
-          @scroll_mode = enabled
-          return [] if enabled
+          # Switching mid-frame would strand buffered events and split the
+          # frame at the injected SYN, so defer until the frame completes
+          if @in_frame
+            MultiLogger.debug("TwoFingerScrollEmulator: defer scroll_mode=#{enabled} until frame end")
+            @pending_scroll_mode = enabled
+            return []
+          end
 
-          release_synthetic_frame(real_finger_count)
+          apply_scroll_mode(enabled)
         end
 
         def process(input_event)
           parse_event(input_event)
 
           unless @scroll_mode || synthetic_active?
-            return [input_event]
+            result = [input_event]
+            result.concat(apply_pending_scroll_mode) if syn_report?(input_event)
+            return result
           end
 
           @frame_events << input_event
           return [] unless syn_report?(input_event)
 
-          flush_frame
+          flush_frame.concat(apply_pending_scroll_mode)
         end
 
         private
@@ -67,10 +78,32 @@ module Fusuma
           [fallback_min, fallback_max]
         end
 
+        def apply_pending_scroll_mode
+          return [] if @pending_scroll_mode.nil?
+
+          enabled = @pending_scroll_mode
+          @pending_scroll_mode = nil
+          return [] if @scroll_mode == enabled
+
+          apply_scroll_mode(enabled)
+        end
+
+        def apply_scroll_mode(enabled)
+          MultiLogger.debug("TwoFingerScrollEmulator: scroll_mode=#{enabled}")
+          @scroll_mode = enabled
+          return [] if enabled
+
+          release_synthetic_frame(real_finger_count)
+        end
+
         def parse_event(input_event)
+          @in_frame = !syn_report?(input_event)
+
           case input_event.type
           when EV_ABS
             parse_abs_event(input_event)
+          when EV_SYN
+            clear_fresh_flags if syn_report?(input_event)
           end
         end
 
@@ -80,7 +113,16 @@ module Fusuma
             @current_slot = input_event.value
             @slots[@current_slot]
           when ABS_MT_TRACKING_ID
-            @slots[@current_slot] = {tracking_id: input_event.value, x: nil, y: nil}
+            slot_state = @slots[@current_slot]
+            # evdev suppresses ABS events with unchanged values, so a new touch
+            # landing on the previous coordinates never resends X/Y; carry the
+            # last known position over instead of resetting it to nil
+            @slots[@current_slot] = {
+              tracking_id: input_event.value,
+              x: slot_state[:x],
+              y: slot_state[:y],
+              fresh: true
+            }
           when ABS_MT_POSITION_X
             record_position(:x, input_event.value)
           when ABS_MT_POSITION_Y
@@ -90,10 +132,16 @@ module Fusuma
 
         def record_position(axis, value)
           slot_state = @slots[@current_slot]
-          if real_slot_active?(@current_slot) && !slot_state[axis].nil? && slot_state[axis] != value
+          # :fresh excludes the touch-down frame: a re-touch away from the
+          # carried-over position is a new touch, not finger motion
+          if real_slot_active?(@current_slot) && !slot_state[:fresh] && !slot_state[axis].nil? && slot_state[axis] != value
             @frame_motion_slots.add(@current_slot)
           end
           slot_state[axis] = value
+        end
+
+        def clear_fresh_flags
+          @slots.each_value { |slot_state| slot_state[:fresh] = false }
         end
 
         def flush_frame
@@ -145,14 +193,21 @@ module Fusuma
         end
 
         def activate_synthetic(real_slot)
-          @tracking_sequence += 1
           real_x = @slots[real_slot][:x]
+          real_y = @slots[real_slot][:y]
+          # Position can still be unknown right after startup (before the first
+          # X/Y events ever arrive); wait instead of guessing
+          return if real_x.nil? || real_y.nil?
+
+          @tracking_sequence += 1
           offset = (real_x > ((@x_min + @x_max) / 2)) ? -@x_offset_size : @x_offset_size
 
           @synthetic = {
             slot: available_synthetic_slot,
             tracking_id: SYNTHETIC_TRACKING_ID_BASE + @tracking_sequence,
-            offset: offset
+            offset: offset,
+            last_x: clamp(real_x + offset, @x_min, @x_max),
+            last_y: clamp(real_y, @y_min, @y_max)
           }
         end
 
@@ -210,9 +265,9 @@ module Fusuma
 
         def synthetic_position_for(real_slot)
           real = @slots[real_slot]
-          x = clamp(real[:x] + @synthetic[:offset], @x_min, @x_max)
-          y = clamp(real[:y], @y_min, @y_max)
-          [x, y]
+          @synthetic[:last_x] = clamp(real[:x] + @synthetic[:offset], @x_min, @x_max) if real[:x]
+          @synthetic[:last_y] = clamp(real[:y], @y_min, @y_max) if real[:y]
+          [@synthetic[:last_x], @synthetic[:last_y]]
         end
 
         def clamp(value, min, max)

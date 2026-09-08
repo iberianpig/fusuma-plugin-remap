@@ -179,6 +179,52 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(motion_output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
+    it "carries over the last position when a re-touch omits X/Y (evdev same-value suppression)" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+      touch_end
+
+      # Re-touch on the same coordinates: evdev suppresses unchanged ABS values,
+      # so neither X nor Y arrives with the new tracking ID
+      process_frame(
+        abs(Revdev::ABS_MT_TRACKING_ID, 20),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+
+      output = nil
+      expect {
+        output = process_frame(abs(Revdev::ABS_MT_POSITION_Y, 560), syn)
+      }.not_to raise_error
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      # X carried over from the previous touch (450) + offset (150 = 15% of width)
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 600])
+    end
+
+    it "skips synthetic activation when the position is still unknown" do
+      emulator.set_scroll_mode(true)
+
+      # Very first touch never reports X (suppressed), only Y motion follows
+      process_frame(
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+      process_frame(abs(Revdev::ABS_MT_POSITION_Y, 520), syn)
+
+      output = nil
+      expect {
+        output = process_frame(abs(Revdev::ABS_MT_POSITION_Y, 530), syn)
+      }.not_to raise_error
+
+      expect(tuples(output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
     it "does not restart scrolling after scroll mode is disabled" do
       emulator.set_scroll_mode(true)
       touch_begin
@@ -197,6 +243,52 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
     it "does nothing for a key press and release with no touch motion" do
       expect(emulator.set_scroll_mode(true)).to eq([])
       expect(emulator.set_scroll_mode(false)).to eq([])
+    end
+
+    it "defers disabling until the frame boundary when called mid-frame" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      # A frame is in flight (buffered, no SYN yet) when the scroll key is released
+      expect(emulator.process(abs(Revdev::ABS_MT_POSITION_X, 470))).to eq([])
+      expect(emulator.set_scroll_mode(false)).to eq([])
+
+      output = process_frame(abs(Revdev::ABS_MT_POSITION_Y, 540), syn)
+
+      # The buffered first half of the frame is not lost
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 470])
+      # The synthetic finger is released after the frame completes
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_TRACKING_ID, -1])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+
+      # No orphaned events remain: the next event passes straight through
+      input_event = abs(Revdev::ABS_MT_POSITION_X, 480)
+      expect(emulator.process(input_event)).to eq([input_event])
+    end
+
+    it "defers enabling until the frame boundary when called mid-frame" do
+      touch_begin
+
+      passthrough_event = abs(Revdev::ABS_MT_POSITION_X, 450)
+      expect(emulator.process(passthrough_event)).to eq([passthrough_event])
+
+      expect(emulator.set_scroll_mode(true)).to eq([])
+
+      # The rest of the current frame still passes through untouched
+      rest_event = abs(Revdev::ABS_MT_POSITION_Y, 520)
+      expect(emulator.process(rest_event)).to eq([rest_event])
+      syn_event = syn
+      expect(emulator.process(syn_event)).to eq([syn_event])
+
+      # From the next frame on, scroll mode is active
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 470),
+        abs(Revdev::ABS_MT_POSITION_Y, 540),
+        syn
+      )
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
     it "returns a release frame when scroll mode is disabled during an active synthetic touch" do
