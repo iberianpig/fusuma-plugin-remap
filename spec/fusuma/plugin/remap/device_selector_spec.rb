@@ -35,6 +35,28 @@ RSpec.describe Fusuma::Plugin::Remap::DeviceSelector do
       end
     end
 
+    context "when virtual remap devices match the configured patterns" do
+      let(:name_patterns) { ["touchpad", "keyboard"] }
+      let(:event_device) { double(Revdev::EventDevice, name: "Physical touchpad") }
+
+      before do
+        allow(Fusuma::Device).to receive(:all).and_return([
+          Fusuma::Device.new(name: "Physical touchpad", id: "event0", available: true),
+          Fusuma::Device.new(name: "fusuma_virtual_touchpad", id: "event1", available: true),
+          Fusuma::Device.new(name: "fusuma_virtual_keyboard", id: "event2", available: true)
+        ])
+        allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
+      end
+
+      it "excludes fusuma virtual devices before opening event devices" do
+        selector.select
+
+        expect(Revdev::EventDevice).to have_received(:new).once.with("/dev/input/event0")
+        expect(Revdev::EventDevice).not_to have_received(:new).with("/dev/input/event1")
+        expect(Revdev::EventDevice).not_to have_received(:new).with("/dev/input/event2")
+      end
+    end
+
     context "when device is not found and wait: false" do
       before do
         allow(Fusuma::Device).to receive(:all).and_return([])
@@ -92,7 +114,8 @@ RSpec.describe Fusuma::Plugin::Remap::DeviceSelector do
 
       before do
         allow(Fusuma::Device).to receive(:available).and_return([
-          Fusuma::Device.new(name: "Touchpad", id: "event0", available: true)
+          Fusuma::Device.new(name: "Touchpad", id: "event0", available: true),
+          Fusuma::Device.new(name: "fusuma_virtual_touchpad", id: "event1", available: true)
         ])
         allow(Revdev::EventDevice).to receive(:new).and_return(event_device)
       end
@@ -106,6 +129,13 @@ RSpec.describe Fusuma::Plugin::Remap::DeviceSelector do
         result = selector.select
         expect(result).to be_a_kind_of(Array)
         expect(result.first).to eq(event_device)
+      end
+
+      it "excludes virtual devices from Device.available results" do
+        selector.select
+
+        expect(Revdev::EventDevice).to have_received(:new).once.with("/dev/input/event0")
+        expect(Revdev::EventDevice).not_to have_received(:new).with("/dev/input/event1")
       end
     end
 

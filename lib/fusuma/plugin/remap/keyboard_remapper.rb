@@ -2,6 +2,7 @@ require "revdev"
 require "json"
 require "set"
 require_relative "layer_manager"
+require_relative "scroll_channel"
 require_relative "uinput_keyboard"
 require_relative "device_selector"
 require_relative "device_matcher"
@@ -14,9 +15,10 @@ module Fusuma
       class KeyboardRemapper
         include Revdev
 
-        VIRTUAL_KEYBOARD_NAME = "fusuma_virtual_keyboard"
+        VIRTUAL_KEYBOARD_NAME = DeviceSelector::VIRTUAL_KEYBOARD_NAME
         DEFAULT_EMERGENCY_KEYBIND = "RIGHTCTRL+LEFTCTRL".freeze
         DEVICE_CHECK_INTERVAL = 3 # seconds - interval for checking new devices
+        POINTER_SCROLL = ScrollChannel::POINTER_SCROLL
 
         # Key conversion tables for better performance and readability
         KEYMAP = Revdev.constants.select { |c| c.start_with?("KEY_", "BTN_") }
@@ -29,15 +31,21 @@ module Fusuma
         # @param layer_manager [Fusuma::Plugin::Remap::LayerManager]
         # @param fusuma_writer [IO]
         # @param config [Hash]
-        def initialize(layer_manager:, fusuma_writer:, config: {})
+        # @param scroll_channel [Fusuma::Plugin::Remap::ScrollChannel]
+        def initialize(layer_manager:, fusuma_writer:, config: {}, scroll_channel: ScrollChannel.instance)
           @layer_manager = layer_manager # request to change layer
           @fusuma_writer = fusuma_writer # write event to original keyboard
           @config = config
+          @scroll_channel = scroll_channel
           @device_matcher = DeviceMatcher.new
           @device_mappings = {}
         end
 
         def run
+          # stdout is block-buffered when piped (e.g. to journald) and this
+          # process logs rarely; flush per write so logs appear immediately
+          $stdout.sync = true
+
           create_virtual_keyboard
           @source_keyboards = reload_keyboards
 
@@ -136,6 +144,8 @@ module Fusuma
                   return
                 end
               end
+
+              next if handle_pressed_pointer_scroll_key(input_event)
             end
 
             remapped, is_modifier_remap = find_remapping(combo_mapping, effective_key)
@@ -167,16 +177,16 @@ module Fusuma
                   write_event_with_log(input_event, context: "simple remap failed")
                 end
               else
-                # Passthrough: record key code to ensure press/release consistency
-                output_code = get_or_record_key_code(input_event.code, input_event.code, input_event.value)
-                passthrough_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
-                write_event_with_log(passthrough_event, context: "passthrough")
+                write_passthrough_event(input_event)
               end
               next
             else
               MultiLogger.warn("Invalid remapped value - type: #{remapped.class}, key: #{input_key}")
               next
             end
+
+            next if handle_pointer_scroll_press(input_event, remapped)
+            next if handle_pointer_scroll_passthrough(input_event, remapped)
 
             # For modifier remaps, handle specially:
             # Release currently pressed modifiers → Send remapped key → Re-press modifiers
@@ -219,6 +229,7 @@ module Fusuma
             @separated_mappings_cache = {}
             @pressed_key_codes = {}
             @pressed_key_names = {}
+            reset_scroll_keys_after_device_removed
             @source_keyboards = reload_keyboards
           end
         rescue EOFError => e # device is closed
@@ -230,6 +241,8 @@ module Fusuma
         private
 
         def reload_keyboards
+          ungrab_keyboards(@source_keyboards) if @source_keyboards
+
           source_keyboards = KeyboardSelector.new(@config[:keyboard_name_patterns]).select
 
           MultiLogger.info("Reload keyboards: #{source_keyboards.map(&:device_name)}")
@@ -240,6 +253,25 @@ module Fusuma
         rescue => e
           MultiLogger.error "Failed to reload keyboards: #{e.message}"
           MultiLogger.error e.backtrace.join("\n")
+        end
+
+        # Release evdev grab on previously held keyboards before reloading.
+        # Without this, the old EventDevice instance keeps the kernel grab,
+        # which makes re-grab fail with EBUSY and leaves the underlying
+        # device unresponsive until the fusuma process exits.
+        def ungrab_keyboards(keyboards)
+          keyboards.each do |kbd|
+            begin
+              kbd.ungrab
+            rescue Errno::EINVAL, Errno::ENODEV
+              # already ungrabbed or device removed
+            end
+            begin
+              kbd.file.close
+            rescue IOError
+              # already closed
+            end
+          end
         end
 
         # Get mapping for specific device from cache or LayerManager
@@ -307,6 +339,65 @@ module Fusuma
 
         def pressed_key_names
           @pressed_key_names ||= {}
+        end
+
+        def scroll_pressed_codes
+          @scroll_pressed_codes ||= Set.new
+        end
+
+        def pointer_scroll_remap?(remapped)
+          ScrollChannel.pointer_scroll_value?(remapped)
+        end
+
+        def handle_pressed_pointer_scroll_key(input_event)
+          return false unless input_event.type == EV_KEY
+
+          case input_event.value
+          when 0
+            return false unless scroll_pressed_codes.delete?(input_event.code)
+
+            @scroll_channel.send_scroll(false) if scroll_pressed_codes.empty?
+            true
+          when 2
+            scroll_pressed_codes.include?(input_event.code)
+          else
+            false
+          end
+        end
+
+        def handle_pointer_scroll_press(input_event, remapped)
+          return false unless input_event.type == EV_KEY
+          return false unless input_event.value == 1
+          return false unless pointer_scroll_remap?(remapped)
+
+          scroll_pressed_codes.add(input_event.code)
+          @scroll_channel.send_scroll(true)
+          true
+        end
+
+        def handle_pointer_scroll_passthrough(input_event, remapped)
+          return false unless input_event.type == EV_KEY
+          return false if input_event.value == 1
+          return false unless pointer_scroll_remap?(remapped)
+
+          # Reaching here means the press was not swallowed (the key went down
+          # before the layer changed), so pass the release/repeat through as-is
+          write_passthrough_event(input_event)
+          true
+        end
+
+        # Passthrough: record key code to ensure press/release consistency
+        def write_passthrough_event(input_event)
+          output_code = get_or_record_key_code(input_event.code, input_event.code, input_event.value)
+          passthrough_event = InputEvent.new(nil, input_event.type, output_code, input_event.value)
+          write_event_with_log(passthrough_event, context: "passthrough")
+        end
+
+        def reset_scroll_keys_after_device_removed
+          return if scroll_pressed_codes.empty?
+
+          scroll_pressed_codes.clear
+          @scroll_channel.send_scroll(false)
         end
 
         # Record key name on press and return recorded name on release
@@ -573,7 +664,7 @@ module Fusuma
 
             if key_str.include?("+")
               combo_remap[key] = value
-            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+")
+            elsif value.is_a?(Array) || value.is_a?(Hash) || value_str&.include?("+") || pointer_scroll_remap?(value)
               combo_remap[key] = value
             else
               simple_remap[key] = value
@@ -722,7 +813,7 @@ module Fusuma
           end
 
           # Release all keys in reverse order
-          keys.reverse.each do |key|
+          keys.reverse_each do |key|
             code = key_to_code(key)
             next unless code
 

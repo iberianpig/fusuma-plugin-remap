@@ -3,6 +3,9 @@ require "ruinput"
 class UinputTouchpad < Ruinput::UinputDevice
   include Ruinput
 
+  UI_SET_PROPBIT_FALLBACK = 0x4004556E
+  UINPUT_SET_PROPBIT = Ruinput.const_defined?(:UI_SET_PROPBIT) ? Ruinput::UI_SET_PROPBIT : UI_SET_PROPBIT_FALLBACK
+
   # create from original event device
   # copy absinfo using eviocgabs
   def create_from_device(name:, device:)
@@ -15,15 +18,10 @@ class UinputTouchpad < Ruinput::UinputDevice
       }
     )
 
-    absinfo = {
-      Revdev::ABS_X => device.absinfo_for_axis(Revdev::ABS_X),
-      Revdev::ABS_Y => device.absinfo_for_axis(Revdev::ABS_Y),
-      Revdev::ABS_MT_POSITION_X => device.absinfo_for_axis(Revdev::ABS_MT_POSITION_X),
-      Revdev::ABS_MT_POSITION_Y => device.absinfo_for_axis(Revdev::ABS_MT_POSITION_Y),
-      Revdev::ABS_MT_SLOT => device.absinfo_for_axis(Revdev::ABS_MT_SLOT),
-      Revdev::ABS_MT_TOOL_TYPE => device.absinfo_for_axis(Revdev::ABS_MT_TOOL_TYPE),
-      Revdev::ABS_MT_TRACKING_ID => device.absinfo_for_axis(Revdev::ABS_MT_TRACKING_ID)
-    }
+    supported = supported_capabilities(device)
+    absinfo = supported[:abs].to_h do |axis|
+      [axis, device.absinfo_for_axis(axis)]
+    end
 
     uud = Ruinput::UinputUserDev.new({
       name: name,
@@ -33,15 +31,31 @@ class UinputTouchpad < Ruinput::UinputDevice
       absmin: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:absmin] } },
       absfuzz: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:absfuzz] } },
       absflat: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:absflat] } },
-      resolution: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:resolution] } }
+      resolution: Array.new(Revdev::ABS_CNT, 0).tap { |a| absinfo.each { |k, v| a[k] = v[:resolution] || 0 } }
     })
 
     @file.syswrite uud.to_byte_string
 
-    set_all_events
+    if supported[:events].empty?
+      Fusuma::MultiLogger.warn("Failed to probe touchpad capabilities; falling back to static event setup")
+      set_all_events
+    else
+      set_supported_events(supported)
+    end
 
     @file.ioctl UI_DEV_CREATE, nil
     @is_created = true
+  end
+
+  def set_supported_events(supported)
+    raise "invalid method call: this uinput is already created" if @is_created
+
+    supported[:events].each { |event_type| @file.ioctl UI_SET_EVBIT, event_type }
+    supported[:keys].each { |code| @file.ioctl UI_SET_KEYBIT, code }
+    supported[:abs].each { |axis| @file.ioctl UI_SET_ABSBIT, axis }
+    supported[:rels].each { |code| @file.ioctl UI_SET_RELBIT, code }
+    supported[:mscs].each { |code| @file.ioctl UI_SET_MSCBIT, code }
+    supported[:props].each { |prop| @file.ioctl UINPUT_SET_PROPBIT, prop }
   end
 
   def set_all_events
@@ -147,6 +161,41 @@ class UinputTouchpad < Ruinput::UinputDevice
         # puts "skipping #{i} (#{Revdev::REVERSE_MAPS[:MSC][i]})"
       end
     end
+  end
+
+  private
+
+  def supported_capabilities(device)
+    {
+      events: supported_codes(device, eviocgbit(0, bit_bytes(Revdev::EV_CNT)), Revdev::EV_CNT),
+      keys: supported_codes(device, eviocgbit(Revdev::EV_KEY, bit_bytes(Revdev::KEY_CNT)), Revdev::KEY_CNT),
+      abs: supported_codes(device, eviocgbit(Revdev::EV_ABS, bit_bytes(Revdev::ABS_CNT)), Revdev::ABS_CNT),
+      rels: supported_codes(device, eviocgbit(Revdev::EV_REL, bit_bytes(Revdev::REL_CNT)), Revdev::REL_CNT),
+      mscs: supported_codes(device, eviocgbit(Revdev::EV_MSC, bit_bytes(Revdev::MSC_CNT)), Revdev::MSC_CNT),
+      props: supported_codes(device, Revdev::EVIOCGPROP, Revdev::INPUT_PROP_CNT)
+    }
+  end
+
+  def supported_codes(device, request, max)
+    bytes = device.read_ioctl_with(request).unpack("C*")
+    (0...max).select do |code|
+      (bytes[code / 8].to_i & (1 << (code % 8))) != 0
+    end
+  rescue Errno::EINVAL, IOError
+    []
+  end
+
+  def bit_bytes(max)
+    (max + 7) / 8
+  end
+
+  def eviocgbit(event_type, length)
+    ioc_read("E", 0x20 + event_type, length)
+  end
+
+  def ioc_read(type, number, size)
+    # Linux _IOR(type, nr, size): direction READ is 2, type is the ioctl group byte.
+    (2 << 30) | (size << 16) | (type.ord << 8) | number
   end
 end
 

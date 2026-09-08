@@ -602,6 +602,122 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
         expect(combo).to eq({})
       end
     end
+
+    context "with POINTER_SCROLL remaps" do
+      let(:mapping) { {S: "POINTER_SCROLL", D: "pointer_scroll", F: "LEFTCTRL", G: "POINTER_SCROLL_FINGER"} }
+
+      it "classifies them as combo remaps so simple remap does not rewrite the key" do
+        simple, combo = remapper.send(:separate_mappings, mapping)
+
+        expect(simple).to eq({F: "LEFTCTRL", G: "POINTER_SCROLL_FINGER"})
+        expect(combo).to eq({S: "POINTER_SCROLL", D: "pointer_scroll"})
+      end
+    end
+  end
+
+  describe "POINTER_SCROLL token handling" do
+    let(:scroll_channel) { instance_double("Fusuma::Plugin::Remap::ScrollChannel") }
+    let(:remapper) do
+      described_class.new(
+        layer_manager: layer_manager,
+        fusuma_writer: fusuma_writer,
+        config: config,
+        scroll_channel: scroll_channel
+      )
+    end
+    let(:press_event) { Revdev::InputEvent.new(nil, Revdev::EV_KEY, Revdev::KEY_S, 1) }
+    let(:repeat_event) { Revdev::InputEvent.new(nil, Revdev::EV_KEY, Revdev::KEY_S, 2) }
+    let(:release_event) { Revdev::InputEvent.new(nil, Revdev::EV_KEY, Revdev::KEY_S, 0) }
+
+    it "recognizes the token case-insensitively" do
+      expect(remapper.send(:pointer_scroll_remap?, "POINTER_SCROLL")).to be true
+      expect(remapper.send(:pointer_scroll_remap?, :pointer_scroll)).to be true
+      expect(remapper.send(:pointer_scroll_remap?, "POINTER_SCROLL_FINGER")).to be false
+      expect(remapper.send(:pointer_scroll_remap?, "BTN_LEFT")).to be false
+    end
+
+    it "sends scroll on and swallows the token key press" do
+      expect(scroll_channel).to receive(:send_scroll).with(true)
+
+      handled = remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL")
+
+      expect(handled).to be true
+      expect(remapper.send(:scroll_pressed_codes)).to include(Revdev::KEY_S)
+    end
+
+    it "swallows repeat events while the token key is held" do
+      allow(scroll_channel).to receive(:send_scroll)
+      remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL")
+
+      expect(remapper.send(:handle_pressed_pointer_scroll_key, repeat_event)).to be true
+    end
+
+    it "sends scroll off on release even if the current mapping changed" do
+      expect(scroll_channel).to receive(:send_scroll).with(true).ordered
+      expect(scroll_channel).to receive(:send_scroll).with(false).ordered
+
+      remapper.send(:handle_pointer_scroll_press, press_event, "POINTER_SCROLL")
+
+      expect(remapper.send(:handle_pressed_pointer_scroll_key, release_event)).to be true
+      expect(remapper.send(:scroll_pressed_codes)).not_to include(Revdev::KEY_S)
+    end
+
+    it "passes through a token-mapped release when the scroll key was not pressed in scroll mode" do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      allow(uinput_keyboard).to receive(:write_input_event)
+      remapper.send(:get_or_record_key_code, Revdev::KEY_S, Revdev::KEY_S, 1)
+
+      expect(Fusuma::MultiLogger).not_to receive(:warn).with(/Invalid remapped value/)
+
+      handled = remapper.send(:handle_pointer_scroll_passthrough, release_event, "POINTER_SCROLL")
+
+      expect(handled).to be true
+      expect(uinput_keyboard).to have_received(:write_input_event) do |event|
+        expect(event.type).to eq(Revdev::EV_KEY)
+        expect(event.code).to eq(Revdev::KEY_S)
+        expect(event.value).to eq(0)
+      end
+    end
+
+    it "passes through a token-mapped repeat when the scroll key was not pressed in scroll mode" do
+      allow(remapper).to receive(:uinput_keyboard).and_return(uinput_keyboard)
+      allow(uinput_keyboard).to receive(:write_input_event)
+
+      expect(Fusuma::MultiLogger).not_to receive(:warn).with(/Invalid remapped value/)
+
+      handled = remapper.send(:handle_pointer_scroll_passthrough, repeat_event, "POINTER_SCROLL")
+
+      expect(handled).to be true
+      expect(uinput_keyboard).to have_received(:write_input_event) do |event|
+        expect(event.type).to eq(Revdev::EV_KEY)
+        expect(event.code).to eq(Revdev::KEY_S)
+        expect(event.value).to eq(2)
+      end
+    end
+
+    it "sends scroll off and clears pressed scroll keys when a keyboard is removed" do
+      keyboard_file = instance_double("IO")
+      source_keyboard = instance_double(
+        "Revdev::EventDevice",
+        file: keyboard_file,
+        read_input_event: nil
+      )
+      layer_reader = instance_double("IO")
+      allow(layer_manager).to receive(:reader).and_return(layer_reader)
+      allow(remapper).to receive(:create_virtual_keyboard)
+      allow(remapper).to receive(:reload_keyboards).and_return([source_keyboard])
+      allow(Fusuma::MultiLogger).to receive(:error)
+      expect(IO).to receive(:select).and_return([[keyboard_file]]).ordered
+      expect(IO).to receive(:select).and_raise(EOFError).ordered
+      allow(source_keyboard).to receive(:read_input_event).and_raise(Errno::ENODEV, "/dev/input/event1")
+      remapper.send(:scroll_pressed_codes).add(Revdev::KEY_S)
+
+      expect(scroll_channel).to receive(:send_scroll).with(false)
+
+      remapper.run
+
+      expect(remapper.send(:scroll_pressed_codes)).to be_empty
+    end
   end
 
   describe "key swap without double conversion" do
@@ -1007,6 +1123,129 @@ RSpec.describe Fusuma::Plugin::Remap::KeyboardRemapper do
 
         expect(remapper.send(:pressed_virtual_keys)).to be_empty
         expect(remapper.send(:virtual_keyboard_all_key_released?)).to be true
+      end
+    end
+  end
+
+  describe "#reload_keyboards" do
+    let(:config) { {keyboard_name_patterns: ["HHKB", "keyboard"], emergency_ungrab_keys: "RIGHTCTRL+LEFTCTRL"} }
+    let(:old_keyboard) do
+      double("old_keyboard",
+        device_name: "AT Translated Set 2 keyboard",
+        ungrab: nil,
+        file: double("old_file", path: "/dev/input/event2", close: nil))
+    end
+    let(:new_keyboard) do
+      double("new_keyboard",
+        device_name: "AT Translated Set 2 keyboard",
+        grab: nil,
+        file: double("new_file", path: "/dev/input/event2"))
+    end
+
+    before do
+      selector = instance_double(described_class::KeyboardSelector)
+      allow(described_class::KeyboardSelector).to receive(:new).and_return(selector)
+      allow(selector).to receive(:select).and_return([new_keyboard])
+      allow(remapper).to receive(:wait_release_all_keys).and_return(true)
+      allow(remapper).to receive(:set_trap)
+      allow(remapper).to receive(:set_emergency_ungrab_keys)
+      allow(Fusuma::MultiLogger).to receive(:info)
+      allow(Fusuma::MultiLogger).to receive(:error)
+    end
+
+    context "when @source_keyboards has existing keyboards" do
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard])
+      end
+
+      it "ungrabs old keyboards before grabbing new ones" do
+        expect(old_keyboard).to receive(:ungrab)
+        remapper.send(:reload_keyboards)
+      end
+
+      it "closes the file descriptor of old keyboards" do
+        expect(old_keyboard.file).to receive(:close)
+        remapper.send(:reload_keyboards)
+      end
+    end
+
+    context "when ungrab raises Errno::EINVAL (already ungrabbed)" do
+      let(:other_keyboard) do
+        double("other_keyboard",
+          device_name: "HHKB",
+          ungrab: nil,
+          file: double("other_file", path: "/dev/input/event3", close: nil))
+      end
+
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard, other_keyboard])
+        allow(old_keyboard).to receive(:ungrab).and_raise(Errno::EINVAL)
+      end
+
+      it "swallows the error and keeps ungrabbing the rest" do
+        expect(other_keyboard).to receive(:ungrab)
+        expect { remapper.send(:reload_keyboards) }.not_to raise_error
+      end
+    end
+
+    context "when ungrab raises Errno::ENODEV (device removed)" do
+      let(:other_keyboard) do
+        double("other_keyboard",
+          device_name: "HHKB",
+          ungrab: nil,
+          file: double("other_file", path: "/dev/input/event3", close: nil))
+      end
+
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard, other_keyboard])
+        allow(old_keyboard).to receive(:ungrab).and_raise(Errno::ENODEV)
+      end
+
+      it "swallows the error and keeps ungrabbing the rest" do
+        expect(other_keyboard).to receive(:ungrab)
+        expect { remapper.send(:reload_keyboards) }.not_to raise_error
+      end
+    end
+
+    context "when file.close raises IOError (already closed)" do
+      let(:other_keyboard) do
+        double("other_keyboard",
+          device_name: "HHKB",
+          ungrab: nil,
+          file: double("other_file", path: "/dev/input/event3", close: nil))
+      end
+
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard, other_keyboard])
+        allow(old_keyboard.file).to receive(:close).and_raise(IOError)
+      end
+
+      it "swallows the error and keeps closing the rest" do
+        expect(other_keyboard.file).to receive(:close)
+        expect { remapper.send(:reload_keyboards) }.not_to raise_error
+      end
+    end
+
+    context "when @source_keyboards is nil (first call at startup)" do
+      it "does not invoke ungrab_keyboards" do
+        expect(remapper).not_to receive(:ungrab_keyboards)
+        remapper.send(:reload_keyboards)
+      end
+    end
+
+    context "ordering between ungrab and grab" do
+      before do
+        remapper.instance_variable_set(:@source_keyboards, [old_keyboard])
+      end
+
+      it "ungrabs old keyboards before grabbing new ones" do
+        call_order = []
+        allow(old_keyboard).to receive(:ungrab) { call_order << :ungrab_old }
+        allow(new_keyboard).to receive(:grab) { call_order << :grab_new }
+
+        remapper.send(:reload_keyboards)
+
+        expect(call_order).to eq([:ungrab_old, :grab_new])
       end
     end
   end
