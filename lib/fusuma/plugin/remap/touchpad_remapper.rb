@@ -6,6 +6,7 @@ require_relative "uinput_touchpad"
 require_relative "device_selector"
 require_relative "scroll_channel"
 require_relative "two_finger_scroll_emulator"
+require_relative "touch_jump_detector"
 require "fusuma/device"
 
 module Fusuma
@@ -28,7 +29,8 @@ module Fusuma
           pointer_scroll_enabled: false,
           scroll_channel: nil,
           uinput_factory: nil,
-          emulator_factory: nil
+          emulator_factory: nil,
+          jump_detector_factory: nil
         )
           @source_touchpads = source_touchpads # original touchpad
           @fusuma_writer = fusuma_writer # write event to fusuma_input
@@ -39,8 +41,10 @@ module Fusuma
           @scroll_channel = @pointer_scroll_requested ? (scroll_channel || ScrollChannel.instance) : nil
           @uinput_factory = uinput_factory || -> { UinputTouchpad.new "/dev/uinput" }
           @emulator_factory = emulator_factory || ->(device) { TwoFingerScrollEmulator.new(device: device) }
+          @jump_detector_factory = jump_detector_factory || ->(device) { TouchJumpDetector.new(device: device) }
           @uinputs_by_touchpad = {}
           @emulators_by_touchpad = {}
+          @jump_detectors_by_touchpad = {}
           @grabbed_touchpads = []
 
           @palm_detectors = @source_touchpads.each_with_object({}) do |source_touchpad, palm_detectors|
@@ -232,6 +236,7 @@ module Fusuma
           destroy_virtual_touchpads
           ungrab_touchpads
           @emulators_by_touchpad = {}
+          @jump_detectors_by_touchpad = {}
 
           # Wait and detect touchpad using DeviceSelector
           @source_touchpads = DeviceSelector.new(
@@ -275,6 +280,7 @@ module Fusuma
 
           @source_touchpads.each do |source_touchpad|
             @emulators_by_touchpad[source_touchpad] ||= @emulator_factory.call(source_touchpad)
+            @jump_detectors_by_touchpad[source_touchpad] ||= @jump_detector_factory.call(source_touchpad)
           end
         end
 
@@ -288,6 +294,7 @@ module Fusuma
           ungrab_touchpads
           @pointer_scroll_enabled = false
           @emulators_by_touchpad = {}
+          @jump_detectors_by_touchpad = {}
         end
 
         # Rebuilt only when the sources or the scroll channel reader change
@@ -348,7 +355,11 @@ module Fusuma
 
         def write_forwarded_events(touchpad, events)
           uinput_device = @uinputs_by_touchpad.fetch(touchpad)
-          events.each { |event| uinput_device.write_input_event(event) }
+          jump_detector = @jump_detectors_by_touchpad[touchpad]
+          events.each do |event|
+            jump_detector&.observe(event)
+            uinput_device.write_input_event(event)
+          end
         end
 
         def destroy_virtual_touchpads

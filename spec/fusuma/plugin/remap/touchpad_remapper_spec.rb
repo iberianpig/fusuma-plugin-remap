@@ -227,6 +227,27 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
 
       expect(uinput).to have_received(:write_input_event).with(forwarded_event)
     end
+
+    it "feeds every forwarded event into the touch jump detector" do
+      forwarded_event = Revdev::InputEvent.new(nil, Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 200)
+      allow(emulator).to receive(:process).with(input_event).and_return([forwarded_event])
+      jump_detector = double("TouchJumpDetector", observe: nil)
+      remapper = described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads,
+        pointer_scroll_enabled: true,
+        scroll_channel: scroll_channel,
+        uinput_factory: uinput_factory,
+        emulator_factory: emulator_factory,
+        jump_detector_factory: ->(_device) { jump_detector }
+      )
+      remapper.instance_variable_set(:@uinputs_by_touchpad, {source_touchpad => uinput})
+      remapper.instance_variable_set(:@emulators_by_touchpad, {source_touchpad => emulator})
+
+      remapper.send(:forward_touchpad_event, source_touchpad, input_event)
+
+      expect(jump_detector).to have_received(:observe).with(forwarded_event)
+    end
   end
 
   describe "#run" do
