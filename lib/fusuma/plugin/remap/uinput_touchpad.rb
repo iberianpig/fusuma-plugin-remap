@@ -23,6 +23,15 @@ class UinputTouchpad < Ruinput::UinputDevice
       [axis, device.absinfo_for_axis(axis)]
     end
 
+    # TwoFingerScrollEmulator puts its synthetic finger on the slot right past
+    # the source device's range, so the virtual device gets one extra slot.
+    # A real touch can never reach that slot, which keeps the synthetic finger
+    # clear of stale per-slot attributes (a leftover MT_TOOL_PALM in
+    # particular) and of live tracking ids.
+    if (slot_info = absinfo[Revdev::ABS_MT_SLOT])
+      absinfo[Revdev::ABS_MT_SLOT] = slot_info.merge(absmax: slot_info[:absmax] + 1)
+    end
+
     uud = Ruinput::UinputUserDev.new({
       name: name,
       id: id,

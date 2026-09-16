@@ -57,6 +57,21 @@ RSpec.describe UinputTouchpad do
   end
 
   describe "#create_from_device" do
+    # TwoFingerScrollEmulator puts its synthetic finger on the slot right past
+    # the physical device's range, so the virtual device must actually have it.
+    it "reserves one multitouch slot beyond the source device's range" do
+      captured = nil
+      allow(Ruinput::UinputUserDev).to receive(:new).and_wrap_original do |original, args|
+        captured = args
+        original.call(args)
+      end
+
+      uinput.create_from_device(name: "virtual", device: source_device)
+
+      expect(captured[:absmax][Revdev::ABS_MT_SLOT]).to eq(absinfo[:absmax] + 1)
+      expect(captured[:absmax][Revdev::ABS_MT_POSITION_X]).to eq(absinfo[:absmax])
+    end
+
     it "sets only key bits supported by the source device" do
       uinput.create_from_device(name: "fusuma_virtual_touchpad", device: source_device)
 

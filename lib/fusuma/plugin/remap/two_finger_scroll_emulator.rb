@@ -23,6 +23,12 @@ module Fusuma
 
         def initialize(device:)
           @slot_min, @slot_max = axis_range(device, ABS_MT_SLOT, fallback_min: 0, fallback_max: 1)
+          # The virtual touchpad is created with one slot more than the
+          # physical device (see UinputTouchpad#create_from_device), and that
+          # extra slot belongs to the synthetic finger alone. A real touch can
+          # never land on it, so the synthetic finger inherits no stale palm
+          # attribute and never overwrites a live tracking id.
+          @synthetic_slot = @slot_max + 1
           @x_min, @x_max = axis_range(device, ABS_MT_POSITION_X, fallback_min: 0, fallback_max: 1000)
           @y_min, @y_max = axis_range(device, ABS_MT_POSITION_Y, fallback_min: 0, fallback_max: 1000)
           @x_offset_size = ((@x_max - @x_min) * 0.15).round
@@ -189,15 +195,7 @@ module Fusuma
           real_slots.size
         end
 
-        def single_real_slot
-          slots = real_slots
-          (slots.size == 1) ? slots.first : nil
-        end
-
         def activate_synthetic(real_slot)
-          synthetic_slot = available_synthetic_slot
-          return false unless synthetic_slot
-
           real = @slots[real_slot]
           # Position can still be unknown right after startup (before the first
           # X/Y events ever arrive); wait instead of guessing
@@ -209,17 +207,13 @@ module Fusuma
           offset = (real_x > ((@x_min + @x_max) / 2)) ? -@x_offset_size : @x_offset_size
 
           @synthetic = {
-            slot: synthetic_slot,
+            slot: @synthetic_slot,
             tracking_id: SYNTHETIC_TRACKING_ID_BASE + @tracking_sequence,
             offset: offset,
             last_x: (real_x + offset).clamp(@x_min, @x_max),
             last_y: real_y.clamp(@y_min, @y_max)
           }
           true
-        end
-
-        def available_synthetic_slot
-          @slot_max.downto(@slot_min).find { |slot| !real_slot_active?(slot) }
         end
 
         def frame_with_synthetic_touch(frame, real_slot, include_tracking_id:)
@@ -229,7 +223,14 @@ module Fusuma
 
           events = frame_without_syn_or_tool_buttons(frame)
           events << input_event(EV_ABS, ABS_MT_SLOT, @synthetic[:slot])
-          events << input_event(EV_ABS, ABS_MT_TRACKING_ID, @synthetic[:tracking_id]) if include_tracking_id
+          if include_tracking_id
+            events << input_event(EV_ABS, ABS_MT_TRACKING_ID, @synthetic[:tracking_id])
+            # The kernel keeps ABS_MT_TOOL_TYPE per slot and libinput never
+            # clears is_tool_palm on a new tracking id, so a slot that once
+            # held a palm would make the synthetic finger a palm too and drop
+            # it from the gesture finger count
+            events << input_event(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_FINGER)
+          end
           events << input_event(EV_ABS, ABS_MT_POSITION_X, synthetic_x)
           events << input_event(EV_ABS, ABS_MT_POSITION_Y, synthetic_y)
           if include_tracking_id
@@ -238,14 +239,14 @@ module Fusuma
             events.concat(tool_events(2))
             events << input_event(EV_KEY, BTN_TOUCH, 1) unless frame_has_btn_touch?(frame)
           end
-          events << input_event(EV_ABS, ABS_MT_SLOT, real_slot)
+          events << input_event(EV_ABS, ABS_MT_SLOT, @current_slot)
           events << syn_event
           events
         end
 
         def frame_with_synthetic_release(frame, real_count)
           events = frame_without_syn_or_tool_buttons(frame)
-          events.concat(release_synthetic_events(real_count, restore_slot: single_real_slot || @current_slot))
+          events.concat(release_synthetic_events(real_count, restore_slot: @current_slot))
           events << syn_event
           events
         end
@@ -253,7 +254,7 @@ module Fusuma
         def release_synthetic_frame(real_count)
           return [] unless synthetic_active?
 
-          events = release_synthetic_events(real_count, restore_slot: single_real_slot || @current_slot)
+          events = release_synthetic_events(real_count, restore_slot: @current_slot)
           events << syn_event
           events
         end

@@ -6,7 +6,9 @@ require "fusuma/plugin/remap/two_finger_scroll_emulator"
 RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
   let(:device) { double("Revdev::EventDevice") }
   let(:emulator) { described_class.new(device: device) }
-  let(:synthetic_slot) { 4 }
+  # One past the physical device's last slot (absmax 4): the virtual touchpad
+  # reserves it so a real touch can never land on the synthetic finger's slot
+  let(:synthetic_slot) { 5 }
 
   before do
     allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_SLOT).and_return(absmin: 0, absmax: 4)
@@ -79,6 +81,17 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
     )
   end
 
+  def values_by_slot(events, code)
+    current_slot = 0
+    events.each_with_object(Hash.new { |hash, slot| hash[slot] = [] }) do |input_event, values|
+      if input_event.type == Revdev::EV_ABS && input_event.code == Revdev::ABS_MT_SLOT
+        current_slot = input_event.value
+      elsif input_event.type == Revdev::EV_ABS && input_event.code == code
+        values[current_slot] << input_event.value
+      end
+    end
+  end
+
   describe "#process" do
     it "passes events through immediately when scroll mode is off" do
       input_event = abs(Revdev::ABS_MT_POSITION_X, 100)
@@ -110,6 +123,59 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
     end
 
+    # The kernel keeps ABS_MT_TOOL_TYPE per slot and libinput never clears its
+    # is_tool_palm on a new tracking id, so a slot that once held a palm keeps
+    # reporting one. Without this the synthetic finger inherits that palm and
+    # libinput drops it from the gesture finger count.
+    it "marks the synthetic finger as MT_TOOL_FINGER so a stale palm cannot carry over" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(values_by_slot(output, Revdev::ABS_MT_TOOL_TYPE)[synthetic_slot]).to eq([Revdev::MT_TOOL_FINGER])
+    end
+
+    it "restores the slot the physical stream last selected, not the surviving real slot" do
+      emulator.set_scroll_mode(true)
+      process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500),
+        abs(Revdev::ABS_MT_SLOT, 1),
+        abs(Revdev::ABS_MT_TRACKING_ID, 11),
+        abs(Revdev::ABS_MT_POSITION_X, 600),
+        abs(Revdev::ABS_MT_POSITION_Y, 500),
+        syn
+      )
+
+      # slot 0 moves, then slot 1 lifts: one real finger left, so the synthetic
+      # finger is injected. The physical stream's selected slot is now 1.
+      injection_output = process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_POSITION_Y, 520),
+        abs(Revdev::ABS_MT_SLOT, 1),
+        abs(Revdev::ABS_MT_TRACKING_ID, -1),
+        syn
+      )
+
+      expect(tuples(injection_output)[-2]).to eq([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, 1])
+
+      # A finger lands on slot 1 again. evdev omits the ABS_MT_SLOT event
+      # because slot 1 is already selected, so the tracking id must not be
+      # redirected into another slot. Slot state carries across frames, so the
+      # assertion reads the two frames as one stream.
+      next_output = process_frame(
+        abs(Revdev::ABS_MT_TRACKING_ID, 12),
+        syn
+      )
+
+      stream = values_by_slot(injection_output + next_output, Revdev::ABS_MT_TRACKING_ID)
+      expect(stream[1]).to include(12)
+      expect(stream[0]).not_to include(12)
+    end
+
     it "keeps slot coordinates across touch restarts and ignores begin-frame motion" do
       emulator.set_scroll_mode(true)
       touch_begin(x: 450, y: 500)
@@ -139,23 +205,19 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(motion_output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
-    context "when the device has no free multitouch slot" do
+    context "when the physical device exposes a single multitouch slot" do
       before do
         allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_SLOT).and_return(absmin: 0, absmax: 0)
       end
 
-      it "passes motion through without injecting nil-valued synthetic events" do
+      it "injects the synthetic finger into the slot reserved past the physical range" do
         emulator.set_scroll_mode(true)
         touch_begin
 
         output = first_scroll_motion
 
-        expect(tuples(output)).to eq([
-          [Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 450],
-          [Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 520],
-          [Revdev::EV_SYN, Revdev::SYN_REPORT, 0]
-        ])
-        expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+        expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, 1])
+        expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
         expect(output.map(&:value)).not_to include(nil)
       end
     end
@@ -223,24 +285,29 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
-    it "releases the synthetic finger when a later real finger uses the synthetic slot" do
+    # Previously the synthetic finger took the highest free slot, so a real
+    # finger on the last slot pushed it down onto a lower one that could still
+    # carry a stale palm attribute from an earlier touch.
+    it "stays off the physical slots even when a real finger holds the highest one" do
       emulator.set_scroll_mode(true)
-      touch_begin
-      first_scroll_motion
+      process_frame(
+        abs(Revdev::ABS_MT_SLOT, 4),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
 
       output = process_frame(
-        abs(Revdev::ABS_MT_SLOT, synthetic_slot),
-        abs(Revdev::ABS_MT_TRACKING_ID, 11),
-        abs(Revdev::ABS_MT_POSITION_X, 200),
-        abs(Revdev::ABS_MT_POSITION_Y, 300),
-        key(Revdev::BTN_TOOL_FINGER, 0),
-        key(Revdev::BTN_TOOL_DOUBLETAP, 1),
+        abs(Revdev::ABS_MT_POSITION_Y, 520),
         syn
       )
 
       expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
-      expect(tracking_ids_by_slot(output)[synthetic_slot]).to include(11)
-      expect(tracking_ids_by_slot(output)[synthetic_slot]).not_to include(-1)
+      expect(tracking_ids_by_slot(output)[synthetic_slot]).to eq([1000001])
+      expect(tracking_ids_by_slot(output)[4]).to be_empty
       expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
     end
 
