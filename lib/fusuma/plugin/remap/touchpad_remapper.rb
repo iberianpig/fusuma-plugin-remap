@@ -115,7 +115,7 @@ module Fusuma
               when Revdev::ABS_MT_TRACKING_ID
                 touch_state[mt_slot][:MT_TRACKING_ID] = input_event.value
                 if input_event.value == -1
-                  touch_state[mt_slot] = {}
+                  release_touch_slot(touch_state, mt_slot)
                 end
               when Revdev::ABS_MT_POSITION_X
                 touch_state[mt_slot][:X] = input_event.value
@@ -166,16 +166,14 @@ module Fusuma
               raise "unhandled event: #{input_event.hr_type}, #{input_event.hr_code}, #{input_event.value}"
             end
 
-            # TODO:
-            # Remember the most recent valid touch position and exclude it if it is close to that position
-            # For example, when dragging, it is possible to touch around the edge of the touchpad again after reaching the edge of the touchpad, so in that case, you do not want to execute palm detection
-            if touch_state[mt_slot][:valid_touch_point] != true
-              touch_state[mt_slot][:valid_touch_point] = @palm_detectors[touchpad].palm?(touch_state[mt_slot])
-            end
-
             if syn_report
+              # TODO:
+              # Remember the most recent valid touch position and exclude it if it is close to that position
+              # For example, when dragging, it is possible to touch around the edge of the touchpad again after reaching the edge of the touchpad, so in that case, you do not want to execute palm detection
+              evaluate_touch_validity(touch_state, @palm_detectors[touchpad])
+
               # Whether any slot is valid (touching)
-              valid_touch = touch_state.any? { |_, st| st[:valid_touch_point] }
+              valid_touch = valid_touch?(touch_state)
 
               status =
                 if valid_touch
@@ -369,6 +367,45 @@ module Fusuma
             # already destroyed
           end
           @uinputs_by_touchpad = {}
+        end
+
+        # Palm detection needs the position the frame settled on. A slot keeps its
+        # coordinates when it is released, so judging the moment a tracking id
+        # arrives would read the position of the touch before it, and the verdict
+        # is never revisited once it is true.
+        def evaluate_touch_validity(touch_state, palm_detector)
+          touch_state.each_value do |slot_state|
+            next unless touch_tracked?(slot_state)
+            next if slot_state[:valid_touch_point] == true
+
+            slot_state[:valid_touch_point] = palm_detector.palm?(slot_state)
+          end
+        end
+
+        # A released slot keeps its coordinates so the next touch can be placed, and
+        # palm detection reads coordinates alone, so the tracking id is the only
+        # thing left that tells whether a finger is still down.
+        def valid_touch?(touch_state)
+          touch_state.any? { |_, slot_state| slot_state[:valid_touch_point] && touch_tracked?(slot_state) }
+        end
+
+        def touch_tracked?(slot_state)
+          tracking_id = slot_state[:MT_TRACKING_ID]
+          !tracking_id.nil? && tracking_id != -1
+        end
+
+        # evdev suppresses ABS events whose value has not changed, so a finger landing
+        # on the coordinates it just left never resends X/Y. Keeping the position lets
+        # palm detection place the next touch instead of reading it as unknown and
+        # reporting the touch invalid for as long as the finger stays there.
+        def release_touch_slot(touch_state, mt_slot)
+          previous = touch_state[mt_slot] || {}
+          touch_state[mt_slot] = {
+            MT_TRACKING_ID: -1,
+            X: previous[:X],
+            Y: previous[:Y],
+            valid_touch_point: false
+          }
         end
 
         def ungrab_touchpads

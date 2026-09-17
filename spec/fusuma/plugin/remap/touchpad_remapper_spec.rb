@@ -250,6 +250,104 @@ RSpec.describe Fusuma::Plugin::Remap::TouchpadRemapper do
     end
   end
 
+  describe "touch slot bookkeeping" do
+    let(:remapper) do
+      described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads
+      )
+    end
+
+    # evdev suppresses ABS events whose value has not changed, so a finger
+    # landing on the coordinates it just left never resends X/Y. Dropping the
+    # position on release leaves palm detection with no coordinates, and it
+    # reports the touch invalid for as long as the finger stays there.
+    it "keeps the last coordinates when a touch is released" do
+      touch_state = {0 => {MT_TRACKING_ID: 10, X: 900, Y: 400, valid_touch_point: true}}
+
+      remapper.send(:release_touch_slot, touch_state, 0)
+
+      expect(touch_state[0][:X]).to eq(900)
+      expect(touch_state[0][:Y]).to eq(400)
+    end
+
+    it "clears the validity of a released slot so the next touch is judged again" do
+      touch_state = {0 => {MT_TRACKING_ID: 10, X: 900, Y: 400, valid_touch_point: true}}
+
+      remapper.send(:release_touch_slot, touch_state, 0)
+
+      expect(touch_state[0][:valid_touch_point]).to be false
+      expect(touch_state[0][:MT_TRACKING_ID]).to eq(-1)
+    end
+  end
+
+  describe "#evaluate_touch_validity" do
+    let(:remapper) do
+      described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads
+      )
+    end
+    let(:palm_detector) { described_class::PalmDetection.new(source_touchpad) }
+
+    # A released slot keeps its coordinates, so judging a slot the moment its
+    # tracking id arrives would read the position of the touch before it. The
+    # verdict is never revisited once it is true, so that misread would stick.
+    it "judges a new touch on its own coordinates, not the ones the slot kept" do
+      touch_state = {0 => {MT_TRACKING_ID: 20, X: 5, Y: 400, valid_touch_point: false}}
+
+      remapper.send(:evaluate_touch_validity, touch_state, palm_detector)
+
+      expect(touch_state[0][:valid_touch_point]).to be false
+    end
+
+    it "marks a touch in the middle of the touchpad valid" do
+      touch_state = {0 => {MT_TRACKING_ID: 20, X: 500, Y: 400, valid_touch_point: false}}
+
+      remapper.send(:evaluate_touch_validity, touch_state, palm_detector)
+
+      expect(touch_state[0][:valid_touch_point]).to be true
+    end
+
+    it "leaves a released slot unjudged even though its coordinates are kept" do
+      touch_state = {0 => {MT_TRACKING_ID: -1, X: 500, Y: 400, valid_touch_point: false}}
+
+      remapper.send(:evaluate_touch_validity, touch_state, palm_detector)
+
+      expect(touch_state[0][:valid_touch_point]).to be false
+    end
+  end
+
+  describe "#valid_touch?" do
+    let(:remapper) do
+      described_class.new(
+        fusuma_writer: fusuma_writer,
+        source_touchpads: source_touchpads
+      )
+    end
+
+    it "counts a slot that is still tracked" do
+      touch_state = {0 => {MT_TRACKING_ID: 10, X: 900, Y: 400, valid_touch_point: true}}
+
+      expect(remapper.send(:valid_touch?, touch_state)).to be true
+    end
+
+    # A released slot keeps its coordinates so the next touch can be placed, and
+    # palm detection reads coordinates alone, so the tracking id is the only
+    # thing left that says whether a finger is actually down.
+    it "does not count a released slot whose coordinates were kept" do
+      touch_state = {0 => {MT_TRACKING_ID: -1, X: 900, Y: 400, valid_touch_point: true}}
+
+      expect(remapper.send(:valid_touch?, touch_state)).to be false
+    end
+
+    it "does not count a slot that has never been tracked" do
+      touch_state = {0 => {MT_TRACKING_ID: nil, X: nil, Y: nil, valid_touch_point: false}}
+
+      expect(remapper.send(:valid_touch?, touch_state)).to be false
+    end
+  end
+
   describe "#run" do
     let(:uinput) { instance_double("Fusuma::Plugin::Remap::UinputTouchpad", create_from_device: nil, destroy: nil) }
     let(:mock_file) { instance_double("File") }
