@@ -81,6 +81,21 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
     )
   end
 
+  # The physical touchpad reports a contact at the very left edge as a palm.
+  # Revdev ships MT_TOOL_FINGER and MT_TOOL_PEN but not MT_TOOL_PALM.
+  def palm_down(slot: 1, x: 0, y: 500, tracking_id: 20)
+    process_frame(
+      abs(Revdev::ABS_MT_SLOT, slot),
+      abs(Revdev::ABS_MT_TRACKING_ID, tracking_id),
+      abs(Revdev::ABS_MT_TOOL_TYPE, described_class::MT_TOOL_PALM),
+      abs(Revdev::ABS_MT_POSITION_X, x),
+      abs(Revdev::ABS_MT_POSITION_Y, y),
+      key(Revdev::BTN_TOUCH, 1),
+      key(Revdev::BTN_TOOL_FINGER, 1),
+      syn
+    )
+  end
+
   def values_by_slot(events, code)
     current_slot = 0
     events.each_with_object(Hash.new { |hash, slot| hash[slot] = [] }) do |input_event, values|
@@ -134,6 +149,77 @@ RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
       output = first_scroll_motion
 
       expect(values_by_slot(output, Revdev::ABS_MT_TOOL_TYPE)[synthetic_slot]).to eq([Revdev::MT_TOOL_FINGER])
+    end
+
+    # libinput drops palms from the gesture finger count, so a palm resting on
+    # the edge must not count as the second finger here either. Counting it
+    # leaves the user with one effective finger and no scroll.
+    it "injects the synthetic finger while a palm rests on another slot" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+    end
+
+    # libinput ends touches in reverse slot order when nfingers_down exceeds the
+    # BTN_TOOL_* count, and the synthetic finger sits on the highest slot, so it
+    # is the first one killed. The tool button has to count the palm too.
+    it "reports a tool button that counts the palm, the real finger and the synthetic finger" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_TRIPLETAP, 1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 0])
+    end
+
+    # The emulator strips every BTN_TOOL_* the physical stream sends, so it owns
+    # the count. A palm landing mid-scroll raises the contact count to three and
+    # a stale DOUBLETAP would make libinput end the synthetic touch.
+    it "re-sends the tool button when a palm lands during an active synthetic touch" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      output = palm_down(slot: 1)
+
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_TRIPLETAP, 1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 0])
+    end
+
+    # Releasing the synthetic finger leaves the palm on the touchpad. Reporting
+    # zero contacts there contradicts the slots libinput can still see.
+    it "keeps reporting a contact when the real finger leaves but a palm stays" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+      touch_begin
+      first_scroll_motion
+
+      output = touch_end(slot: 0)
+
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_FINGER, 1])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
+    # Observed on the device before palms were excluded: once the real finger
+    # left, the lone palm was read as the one finger to pair with and got a
+    # synthetic finger of its own.
+    it "does not inject a synthetic finger when only a palm is on the touchpad" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 30),
+        abs(Revdev::ABS_MT_POSITION_Y, 560),
+        syn
+      )
+
+      expect(tracking_ids_by_slot(output)[synthetic_slot]).to be_empty
     end
 
     it "restores the slot the physical stream last selected, not the surviving real slot" do

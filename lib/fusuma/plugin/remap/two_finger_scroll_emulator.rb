@@ -12,6 +12,8 @@ module Fusuma
 
         SYNTHETIC_TRACKING_ID_BASE = 1_000_000
         QUINTTAP = 0x148
+        # Revdev ships MT_TOOL_FINGER and MT_TOOL_PEN but not MT_TOOL_PALM
+        MT_TOOL_PALM = 2
 
         TOOL_BUTTONS = [
           BTN_TOOL_FINGER,
@@ -33,7 +35,7 @@ module Fusuma
           @y_min, @y_max = axis_range(device, ABS_MT_POSITION_Y, fallback_min: 0, fallback_max: 1000)
           @x_offset_size = ((@x_max - @x_min) * 0.15).round
 
-          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil, new_touch: false} }
+          @slots = Hash.new { |hash, slot| hash[slot] = {tracking_id: nil, x: nil, y: nil, new_touch: false, tool_type: nil} }
           @current_slot = @slot_min
           @frame_events = []
           @frame_motion_slots = Set.new
@@ -42,6 +44,7 @@ module Fusuma
           @tracking_sequence = 0
           @in_frame = false
           @pending_scroll_mode = nil
+          @emitted_tool_count = nil
         end
 
         def set_scroll_mode(enabled)
@@ -99,7 +102,7 @@ module Fusuma
           @scroll_mode = enabled
           return [] if enabled
 
-          release_synthetic_frame(real_finger_count)
+          release_synthetic_frame(contact_count)
         end
 
         def parse_event(input_event)
@@ -124,6 +127,10 @@ module Fusuma
             # coordinates never resends X/Y
             slot_state[:tracking_id] = input_event.value
             slot_state[:new_touch] = input_event.value != -1
+          when ABS_MT_TOOL_TYPE
+            # Mirror libinput: is_tool_palm is set from this event and is never
+            # cleared by a tracking id reset, so the value sticks to the slot
+            @slots[@current_slot][:tool_type] = input_event.value
           when ABS_MT_POSITION_X
             record_position(:x, input_event.value)
           when ABS_MT_POSITION_Y
@@ -159,7 +166,9 @@ module Fusuma
           active_slots = real_slots
           count = active_slots.size
           if synthetic_active? && (count.zero? || count >= 2)
-            return frame_with_synthetic_release(frame, count)
+            # The palm stays on the touchpad after the synthetic finger goes, so the
+            # count handed to the release frame counts contacts, not fingers
+            return frame_with_synthetic_release(frame, contact_count)
           end
 
           if @scroll_mode
@@ -188,11 +197,19 @@ module Fusuma
         end
 
         def real_slots
-          (@slot_min..@slot_max).select { |slot| real_slot_active?(slot) }
+          (@slot_min..@slot_max).select { |slot| real_slot_active?(slot) && !palm_slot?(slot) }
         end
 
-        def real_finger_count
-          real_slots.size
+        # libinput excludes palms from the gesture finger count, so counting one
+        # here would leave the user with a single effective finger and no scroll
+        def palm_slot?(slot)
+          @slots[slot][:tool_type] == MT_TOOL_PALM
+        end
+
+        # Every live contact, palms included. libinput matches BTN_TOOL_* against
+        # the number of slots it sees, not against the fingers it counts
+        def contact_count
+          (@slot_min..@slot_max).count { |slot| real_slot_active?(slot) }
         end
 
         def activate_synthetic(real_slot)
@@ -233,40 +250,45 @@ module Fusuma
           end
           events << input_event(EV_ABS, ABS_MT_POSITION_X, synthetic_x)
           events << input_event(EV_ABS, ABS_MT_POSITION_Y, synthetic_y)
-          if include_tracking_id
-            # Tool/touch state only changes when the synthetic finger appears;
-            # the kernel keeps key state between frames, so mirror frames need no re-emission
-            events.concat(tool_events(2))
-            events << input_event(EV_KEY, BTN_TOUCH, 1) unless frame_has_btn_touch?(frame)
+          # The emulator strips every BTN_TOOL_* the physical stream sends, so it
+          # owns the count. It changes whenever a contact lands or leaves, not just
+          # when the synthetic finger appears, and libinput ends touches in reverse
+          # slot order once the count falls behind the number of slots it sees.
+          tool_count = contact_count + 1
+          if include_tracking_id || tool_count != @emitted_tool_count
+            events.concat(tool_events(tool_count))
+            @emitted_tool_count = tool_count
           end
+          events << input_event(EV_KEY, BTN_TOUCH, 1) if include_tracking_id && !frame_has_btn_touch?(frame)
           events << input_event(EV_ABS, ABS_MT_SLOT, @current_slot)
           events << syn_event
           events
         end
 
-        def frame_with_synthetic_release(frame, real_count)
+        def frame_with_synthetic_release(frame, remaining_contacts)
           events = frame_without_syn_or_tool_buttons(frame)
-          events.concat(release_synthetic_events(real_count, restore_slot: @current_slot))
+          events.concat(release_synthetic_events(remaining_contacts, restore_slot: @current_slot))
           events << syn_event
           events
         end
 
-        def release_synthetic_frame(real_count)
+        def release_synthetic_frame(remaining_contacts)
           return [] unless synthetic_active?
 
-          events = release_synthetic_events(real_count, restore_slot: @current_slot)
+          events = release_synthetic_events(remaining_contacts, restore_slot: @current_slot)
           events << syn_event
           events
         end
 
-        def release_synthetic_events(real_count, restore_slot:)
+        def release_synthetic_events(remaining_contacts, restore_slot:)
           synthetic_slot = @synthetic[:slot]
           @synthetic = nil
 
           events = [input_event(EV_ABS, ABS_MT_SLOT, synthetic_slot)]
           events << input_event(EV_ABS, ABS_MT_TRACKING_ID, -1) unless real_slot_active?(synthetic_slot)
-          events.concat(tool_events(real_count))
-          events << input_event(EV_KEY, BTN_TOUCH, real_count.positive? ? 1 : 0)
+          events.concat(tool_events(remaining_contacts))
+          @emitted_tool_count = remaining_contacts
+          events << input_event(EV_KEY, BTN_TOUCH, remaining_contacts.positive? ? 1 : 0)
           events << input_event(EV_ABS, ABS_MT_SLOT, restore_slot) unless restore_slot.nil?
           events
         end
