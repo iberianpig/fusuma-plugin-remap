@@ -186,6 +186,8 @@ module Fusuma
                 next
               end
 
+              log_touch_verdict(status, touch_state)
+
               # TODO: define format as fusuma_input
               # TODO: Add data to identify multiple touchpads
               data = {
@@ -367,6 +369,21 @@ module Fusuma
             # already destroyed
           end
           @uinputs_by_touchpad = {}
+        end
+
+        # Instrumentation for the pass-through investigation: PalmDetection judges a
+        # contact by its coordinates alone, so the only way to learn why one was
+        # rejected is to record where it sat. Logged only when the verdict changes,
+        # which keeps this to a few lines per gesture.
+        def log_touch_verdict(status, touch_state)
+          live = touch_state.select { |_slot, slot_state| touch_tracked?(slot_state) }
+          return if live.empty?
+
+          described = live.map do |slot, slot_state|
+            verdict = slot_state[:valid_touch_point] ? "valid" : "rejected"
+            "slot#{slot}:x=#{slot_state[:X]},y=#{slot_state[:Y]},#{verdict}"
+          end
+          MultiLogger.debug("PalmDetection verdict status=#{status} #{described.join(" ")}")
         end
 
         # Palm detection needs the position the frame settled on. A slot keeps its
