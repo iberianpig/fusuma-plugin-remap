@@ -27,6 +27,8 @@ module Fusuma
         # measure the stall directly.
         STALL_THRESHOLD_SEC = 0.2
 
+        TOOL_NAMES = {0 => "FINGER", 1 => "PEN", 2 => "PALM"}.freeze
+
         def initialize(device:, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
           @x_threshold = axis_threshold(device, ABS_MT_POSITION_X)
           @y_threshold = axis_threshold(device, ABS_MT_POSITION_Y)
@@ -54,6 +56,8 @@ module Fusuma
               @frame[@current_slot][:y] = input_event.value
             when ABS_MT_TRACKING_ID
               @frame[@current_slot][:tracking_id] = input_event.value
+            when ABS_MT_TOOL_TYPE
+              @frame[@current_slot][:tool_type] = input_event.value
             end
           when EV_SYN
             evaluate_frame if syn_report?(input_event)
@@ -90,6 +94,7 @@ module Fusuma
           @frame.each do |slot, updates|
             state = @slots[slot]
             check_jump(slot, state, updates)
+            check_tool_type(slot, state, updates)
             state.merge!(updates)
           end
           @touch_active = @slots.any? { |_slot, state| !state[:tracking_id].nil? && state[:tracking_id] != -1 }
@@ -99,6 +104,31 @@ module Fusuma
 
         def syn_report?(input_event)
           input_event.type == EV_SYN && input_event.code == SYN_REPORT
+        end
+
+        # libinput never clears is_tool_palm on a new tracking id, and a palm is kept
+        # out of pointer motion as well as out of gestures, so a slot stuck at
+        # MT_TOOL_PALM freezes the cursor. Record the tool type each touch starts
+        # with and every later change, so a live palm can be told from a stale one.
+        def check_tool_type(slot, state, updates)
+          if updates[:tracking_id] && updates[:tracking_id] != -1
+            tool = updates.fetch(:tool_type, state[:tool_type])
+            MultiLogger.debug(
+              "TouchJumpDetector: tool_type slot=#{slot} #{tool_name(tool)} " \
+              "tracking_id=#{updates[:tracking_id]} " \
+              "x=#{updates.fetch(:x, state[:x])} y=#{updates.fetch(:y, state[:y])}"
+            )
+          elsif updates.key?(:tool_type) && updates[:tool_type] != state[:tool_type]
+            MultiLogger.debug(
+              "TouchJumpDetector: tool_type slot=#{slot} " \
+              "#{tool_name(state[:tool_type])}->#{tool_name(updates[:tool_type])} " \
+              "tracking_id=#{state[:tracking_id]}"
+            )
+          end
+        end
+
+        def tool_name(value)
+          TOOL_NAMES.fetch(value, value.inspect)
         end
 
         def check_jump(slot, state, updates)

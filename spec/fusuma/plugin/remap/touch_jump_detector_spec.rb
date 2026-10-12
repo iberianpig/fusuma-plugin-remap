@@ -75,6 +75,54 @@ RSpec.describe Fusuma::Plugin::Remap::TouchJumpDetector do
     observe_frame(abs(Revdev::ABS_MT_POSITION_X, 600))
   end
 
+  # libinput never clears is_tool_palm on a new tracking id, and a palm is
+  # excluded from pointer motion as well as from gestures, so a slot stuck at
+  # MT_TOOL_PALM freezes the cursor. The timeline of which slot held which tool
+  # type is the only way to tell a live palm from a stale one.
+  describe "tool type tracking" do
+    it "records the tool type a new touch starts with" do
+      expect(Fusuma::MultiLogger).to receive(:debug)
+        .with(a_string_matching(/tool_type slot=0 PALM tracking_id=10/))
+
+      observe_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_TOOL_TYPE, 2),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500)
+      )
+    end
+
+    it "records a tool type that changes while the touch continues" do
+      observe_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_TOOL_TYPE, 0),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500)
+      )
+
+      expect(Fusuma::MultiLogger).to receive(:debug)
+        .with(a_string_matching(/tool_type slot=0 FINGER->PALM/))
+
+      observe_frame(abs(Revdev::ABS_MT_TOOL_TYPE, 2))
+    end
+
+    it "stays quiet while the tool type is unchanged" do
+      observe_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_TOOL_TYPE, 0),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500)
+      )
+
+      expect(Fusuma::MultiLogger).not_to receive(:debug)
+
+      observe_frame(abs(Revdev::ABS_MT_POSITION_X, 410))
+    end
+  end
+
   describe "stall detection" do
     let(:clock) { double("clock") }
     let(:detector) { described_class.new(device: device, clock: -> { clock.now }) }
