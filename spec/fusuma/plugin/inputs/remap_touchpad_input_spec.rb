@@ -3,6 +3,7 @@ require "spec_helper"
 require "fusuma/plugin/inputs/input"
 require "fusuma/plugin/inputs/remap_touchpad_input"
 require "fusuma/plugin/remap/device_selector"
+require "fusuma/plugin/remap/scroll_channel"
 require "fusuma/device"
 
 RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
@@ -18,9 +19,20 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
   end
 
   describe "#setup_remapper" do
+    let(:scroll_reader) { instance_double("IO", close: nil) }
+    let(:scroll_writer) { instance_double("IO", close: nil) }
+    let(:scroll_channel) do
+      instance_double(
+        "Fusuma::Plugin::Remap::ScrollChannel",
+        reader: scroll_reader,
+        writer: scroll_writer
+      )
+    end
+
     before do
       allow_any_instance_of(described_class).to receive(:fork).and_yield
       allow_any_instance_of(described_class).to receive(:config_params).and_return(nil)
+      allow(Fusuma::Plugin::Remap::ScrollChannel).to receive(:instance).and_return(scroll_channel)
     end
 
     describe "IO pipe creation" do
@@ -71,6 +83,88 @@ RSpec.describe Fusuma::Plugin::Inputs::RemapTouchpadInput do
         ).and_return(double(run: nil))
 
         described_class.new
+      end
+    end
+
+    describe "pointer scroll wiring" do
+      before do
+        allow_any_instance_of(described_class).to receive(:config_params).with(:touchpad_name_patterns).and_return(["Touchpad"])
+        allow(IO).to receive(:pipe).and_return([double(close: nil), double(close: nil)])
+        allow_any_instance_of(Fusuma::Plugin::Remap::DeviceSelector).to receive(:select).and_return([])
+      end
+
+      it "passes pointer_scroll_enabled when POINTER_SCROLL appears in any remap value" do
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: "POINTER_SCROLL"}},
+          {context: {thumbsense: true}, remap: {D: "BTN_LEFT"}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+
+        expect(Fusuma::Plugin::Remap::TouchpadRemapper).to receive(:new).with(
+          hash_including(pointer_scroll_enabled: true, scroll_channel: scroll_channel)
+        ).and_return(double(run: nil))
+
+        described_class.new
+      end
+
+      it "leaves forwarding disabled when the token is absent" do
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: "BTN_LEFT"}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+
+        expect(Fusuma::Plugin::Remap::TouchpadRemapper).to receive(:new).with(
+          hash_including(pointer_scroll_enabled: false, scroll_channel: scroll_channel)
+        ).and_return(double(run: nil))
+
+        described_class.new
+      end
+
+      it "closes the unused scroll channel writer inside the child fork" do
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: "POINTER_SCROLL"}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+        allow(Fusuma::Plugin::Remap::TouchpadRemapper).to receive(:new).and_return(double(run: nil))
+
+        expect(scroll_writer).to receive(:close)
+
+        described_class.new
+      end
+    end
+
+    describe "#pointer_scroll_configured?" do
+      before do
+        allow_any_instance_of(described_class).to receive(:setup_remapper)
+      end
+
+      it "detects the token case-insensitively in nested remap values" do
+        input = described_class.new
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: ["BTN_LEFT", "pointer_scroll"]}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+
+        expect(input.send(:pointer_scroll_configured?)).to be true
+      end
+
+      it "does not detect the legacy POINTER_SCROLL_FINGER token" do
+        input = described_class.new
+        config = instance_double("Fusuma::Config", keymap: [
+          {remap: {S: "POINTER_SCROLL_FINGER"}}
+        ])
+        allow(Fusuma::Config).to receive(:instance).and_return(config)
+
+        expect(input.send(:pointer_scroll_configured?)).to be false
+      end
+
+      it "warns and returns false when config detection fails" do
+        input = described_class.new
+        allow(Fusuma::Config).to receive(:instance).and_raise(StandardError, "broken config")
+
+        expect(Fusuma::MultiLogger).to receive(:warn).with("Failed to detect POINTER_SCROLL config: broken config")
+
+        expect(input.send(:pointer_scroll_configured?)).to be false
       end
     end
 

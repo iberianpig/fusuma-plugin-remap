@@ -1,0 +1,576 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "fusuma/plugin/remap/two_finger_scroll_emulator"
+
+RSpec.describe Fusuma::Plugin::Remap::TwoFingerScrollEmulator do
+  let(:device) { double("Revdev::EventDevice") }
+  let(:emulator) { described_class.new(device: device) }
+  # One past the physical device's last slot (absmax 4): the virtual touchpad
+  # reserves it so a real touch can never land on the synthetic finger's slot
+  let(:synthetic_slot) { 5 }
+
+  before do
+    allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_SLOT).and_return(absmin: 0, absmax: 4)
+    allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_POSITION_X).and_return(absmin: 0, absmax: 1000)
+    allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_POSITION_Y).and_return(absmin: 0, absmax: 1000)
+  end
+
+  def event(type, code, value)
+    Revdev::InputEvent.new(nil, type, code, value)
+  end
+
+  def abs(code, value)
+    event(Revdev::EV_ABS, code, value)
+  end
+
+  def key(code, value)
+    event(Revdev::EV_KEY, code, value)
+  end
+
+  def syn
+    event(Revdev::EV_SYN, Revdev::SYN_REPORT, 0)
+  end
+
+  def process_frame(*events)
+    events.flat_map { |input_event| emulator.process(input_event) }
+  end
+
+  def tuples(events)
+    events.map { |input_event| [input_event.type, input_event.code, input_event.value] }
+  end
+
+  def tracking_ids_by_slot(events)
+    current_slot = 0
+    events.each_with_object(Hash.new { |hash, slot| hash[slot] = [] }) do |input_event, tracking_ids|
+      if input_event.type == Revdev::EV_ABS && input_event.code == Revdev::ABS_MT_SLOT
+        current_slot = input_event.value
+      elsif input_event.type == Revdev::EV_ABS && input_event.code == Revdev::ABS_MT_TRACKING_ID
+        tracking_ids[current_slot] << input_event.value
+      end
+    end
+  end
+
+  def touch_begin(x: 400, y: 500, tracking_id: 10, slot: 0)
+    process_frame(
+      abs(Revdev::ABS_MT_SLOT, slot),
+      abs(Revdev::ABS_MT_TRACKING_ID, tracking_id),
+      abs(Revdev::ABS_MT_POSITION_X, x),
+      abs(Revdev::ABS_MT_POSITION_Y, y),
+      key(Revdev::BTN_TOUCH, 1),
+      key(Revdev::BTN_TOOL_FINGER, 1),
+      syn
+    )
+  end
+
+  def touch_end(slot: 0)
+    process_frame(
+      abs(Revdev::ABS_MT_SLOT, slot),
+      abs(Revdev::ABS_MT_TRACKING_ID, -1),
+      key(Revdev::BTN_TOUCH, 0),
+      key(Revdev::BTN_TOOL_FINGER, 0),
+      syn
+    )
+  end
+
+  def first_scroll_motion(x: 450, y: 520)
+    process_frame(
+      abs(Revdev::ABS_MT_POSITION_X, x),
+      abs(Revdev::ABS_MT_POSITION_Y, y),
+      syn
+    )
+  end
+
+  # The physical touchpad reports a contact at the very left edge as a palm.
+  # Revdev ships MT_TOOL_FINGER and MT_TOOL_PEN but not MT_TOOL_PALM.
+  def palm_down(slot: 1, x: 0, y: 500, tracking_id: 20)
+    process_frame(
+      abs(Revdev::ABS_MT_SLOT, slot),
+      abs(Revdev::ABS_MT_TRACKING_ID, tracking_id),
+      abs(Revdev::ABS_MT_TOOL_TYPE, described_class::MT_TOOL_PALM),
+      abs(Revdev::ABS_MT_POSITION_X, x),
+      abs(Revdev::ABS_MT_POSITION_Y, y),
+      key(Revdev::BTN_TOUCH, 1),
+      key(Revdev::BTN_TOOL_FINGER, 1),
+      syn
+    )
+  end
+
+  def values_by_slot(events, code)
+    current_slot = 0
+    events.each_with_object(Hash.new { |hash, slot| hash[slot] = [] }) do |input_event, values|
+      if input_event.type == Revdev::EV_ABS && input_event.code == Revdev::ABS_MT_SLOT
+        current_slot = input_event.value
+      elsif input_event.type == Revdev::EV_ABS && input_event.code == code
+        values[current_slot] << input_event.value
+      end
+    end
+  end
+
+  describe "#process" do
+    it "passes events through immediately when scroll mode is off" do
+      input_event = abs(Revdev::ABS_MT_POSITION_X, 100)
+
+      expect(emulator.process(input_event)).to eq([input_event])
+    end
+
+    it "does not inject a synthetic finger until the real finger moves" do
+      emulator.set_scroll_mode(true)
+
+      output = touch_begin
+
+      expect(tuples(output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    it "injects the synthetic finger in the first motion frame and restores the real slot" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 600])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 520])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_FINGER, 0])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+      expect(tuples(output)[-2]).to eq([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, 0])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
+    # The kernel keeps ABS_MT_TOOL_TYPE per slot and libinput never clears its
+    # is_tool_palm on a new tracking id, so a slot that once held a palm keeps
+    # reporting one. Without this the synthetic finger inherits that palm and
+    # libinput drops it from the gesture finger count.
+    it "marks the synthetic finger as MT_TOOL_FINGER so a stale palm cannot carry over" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(values_by_slot(output, Revdev::ABS_MT_TOOL_TYPE)[synthetic_slot]).to eq([Revdev::MT_TOOL_FINGER])
+    end
+
+    # libinput drops palms from the gesture finger count, so a palm resting on
+    # the edge must not count as the second finger here either. Counting it
+    # leaves the user with one effective finger and no scroll.
+    it "injects the synthetic finger while a palm rests on another slot" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+    end
+
+    # libinput ends touches in reverse slot order when nfingers_down exceeds the
+    # BTN_TOOL_* count, and the synthetic finger sits on the highest slot, so it
+    # is the first one killed. The tool button has to count the palm too.
+    it "reports a tool button that counts the palm, the real finger and the synthetic finger" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+      touch_begin
+
+      output = first_scroll_motion
+
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_TRIPLETAP, 1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 0])
+    end
+
+    # The emulator strips every BTN_TOOL_* the physical stream sends, so it owns
+    # the count. A palm landing mid-scroll raises the contact count to three and
+    # a stale DOUBLETAP would make libinput end the synthetic touch.
+    it "re-sends the tool button when a palm lands during an active synthetic touch" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      output = palm_down(slot: 1)
+
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_TRIPLETAP, 1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 0])
+    end
+
+    # Releasing the synthetic finger leaves the palm on the touchpad. Reporting
+    # zero contacts there contradicts the slots libinput can still see.
+    it "keeps reporting a contact when the real finger leaves but a palm stays" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+      touch_begin
+      first_scroll_motion
+
+      output = touch_end(slot: 0)
+
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_FINGER, 1])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
+    # Observed on the device before palms were excluded: once the real finger
+    # left, the lone palm was read as the one finger to pair with and got a
+    # synthetic finger of its own.
+    it "does not inject a synthetic finger when only a palm is on the touchpad" do
+      emulator.set_scroll_mode(true)
+      palm_down(slot: 1)
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 30),
+        abs(Revdev::ABS_MT_POSITION_Y, 560),
+        syn
+      )
+
+      expect(tracking_ids_by_slot(output)[synthetic_slot]).to be_empty
+    end
+
+    it "restores the slot the physical stream last selected, not the surviving real slot" do
+      emulator.set_scroll_mode(true)
+      process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500),
+        abs(Revdev::ABS_MT_SLOT, 1),
+        abs(Revdev::ABS_MT_TRACKING_ID, 11),
+        abs(Revdev::ABS_MT_POSITION_X, 600),
+        abs(Revdev::ABS_MT_POSITION_Y, 500),
+        syn
+      )
+
+      # slot 0 moves, then slot 1 lifts: one real finger left, so the synthetic
+      # finger is injected. The physical stream's selected slot is now 1.
+      injection_output = process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_POSITION_Y, 520),
+        abs(Revdev::ABS_MT_SLOT, 1),
+        abs(Revdev::ABS_MT_TRACKING_ID, -1),
+        syn
+      )
+
+      expect(tuples(injection_output)[-2]).to eq([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, 1])
+
+      # A finger lands on slot 1 again. evdev omits the ABS_MT_SLOT event
+      # because slot 1 is already selected, so the tracking id must not be
+      # redirected into another slot. Slot state carries across frames, so the
+      # assertion reads the two frames as one stream.
+      next_output = process_frame(
+        abs(Revdev::ABS_MT_TRACKING_ID, 12),
+        syn
+      )
+
+      stream = values_by_slot(injection_output + next_output, Revdev::ABS_MT_TRACKING_ID)
+      expect(stream[1]).to include(12)
+      expect(stream[0]).not_to include(12)
+    end
+
+    it "keeps slot coordinates across touch restarts and ignores begin-frame motion" do
+      emulator.set_scroll_mode(true)
+      touch_begin(x: 450, y: 500)
+      first_scroll_motion(x: 450, y: 520)
+      touch_end
+
+      begin_output = process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 20),
+        abs(Revdev::ABS_MT_POSITION_Y, 700),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+
+      expect(tuples(begin_output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(begin_output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+
+      motion_output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_Y, 720),
+        syn
+      )
+
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 600])
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 720])
+      expect(tuples(motion_output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    context "when the physical device exposes a single multitouch slot" do
+      before do
+        allow(device).to receive(:absinfo_for_axis).with(Revdev::ABS_MT_SLOT).and_return(absmin: 0, absmax: 0)
+      end
+
+      it "injects the synthetic finger into the slot reserved past the physical range" do
+        emulator.set_scroll_mode(true)
+        touch_begin
+
+        output = first_scroll_motion
+
+        expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, 1])
+        expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+        expect(output.map(&:value)).not_to include(nil)
+      end
+    end
+
+    it "passes motion through when the real slot has incomplete coordinates" do
+      emulator.set_scroll_mode(true)
+      process_frame(
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_POSITION_X, 450),
+        syn
+      )
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 460),
+        syn
+      )
+
+      expect(tuples(output)).to eq([
+        [Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 460],
+        [Revdev::EV_SYN, Revdev::SYN_REPORT, 0]
+      ])
+      expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    it "mirrors subsequent real finger movement to the synthetic slot" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 500),
+        abs(Revdev::ABS_MT_POSITION_Y, 530),
+        syn
+      )
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 650])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_Y, 530])
+      synthetic_tracking_ids = output.select { |input_event|
+        input_event.type == Revdev::EV_ABS &&
+          input_event.code == Revdev::ABS_MT_TRACKING_ID &&
+          input_event.value != -1
+      }
+      expect(synthetic_tracking_ids).to be_empty
+    end
+
+    it "releases the synthetic finger when a second real finger appears" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_SLOT, 1),
+        abs(Revdev::ABS_MT_TRACKING_ID, 11),
+        abs(Revdev::ABS_MT_POSITION_X, 200),
+        abs(Revdev::ABS_MT_POSITION_Y, 300),
+        key(Revdev::BTN_TOOL_FINGER, 0),
+        key(Revdev::BTN_TOOL_DOUBLETAP, 1),
+        syn
+      )
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_TRACKING_ID, -1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    # Previously the synthetic finger took the highest free slot, so a real
+    # finger on the last slot pushed it down onto a lower one that could still
+    # carry a stale palm attribute from an earlier touch.
+    it "stays off the physical slots even when a real finger holds the highest one" do
+      emulator.set_scroll_mode(true)
+      process_frame(
+        abs(Revdev::ABS_MT_SLOT, 4),
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        abs(Revdev::ABS_MT_POSITION_X, 400),
+        abs(Revdev::ABS_MT_POSITION_Y, 500),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_Y, 520),
+        syn
+      )
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tracking_ids_by_slot(output)[synthetic_slot]).to eq([1000001])
+      expect(tracking_ids_by_slot(output)[4]).to be_empty
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    it "keeps scroll mode across touch restarts while the key remains pressed" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      touch_end
+
+      begin_output = touch_begin(x: 100, y: 200, tracking_id: 20)
+
+      expect(tuples(begin_output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(begin_output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+
+      motion_output = first_scroll_motion(x: 130, y: 220)
+
+      expect(tuples(motion_output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(motion_output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    it "carries over the last position when a re-touch omits X/Y (evdev same-value suppression)" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+      touch_end
+
+      # Re-touch on the same coordinates: evdev suppresses unchanged ABS values,
+      # so neither X nor Y arrives with the new tracking ID
+      process_frame(
+        abs(Revdev::ABS_MT_TRACKING_ID, 20),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+
+      output = nil
+      expect {
+        output = process_frame(abs(Revdev::ABS_MT_POSITION_Y, 560), syn)
+      }.not_to raise_error
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      # X carried over from the previous touch (450) + offset (150 = 15% of width)
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 600])
+    end
+
+    it "skips synthetic activation when the position is still unknown" do
+      emulator.set_scroll_mode(true)
+
+      # Very first touch never reports X (suppressed), only Y motion follows
+      process_frame(
+        abs(Revdev::ABS_MT_TRACKING_ID, 10),
+        key(Revdev::BTN_TOUCH, 1),
+        key(Revdev::BTN_TOOL_FINGER, 1),
+        syn
+      )
+      process_frame(abs(Revdev::ABS_MT_POSITION_Y, 520), syn)
+
+      output = nil
+      expect {
+        output = process_frame(abs(Revdev::ABS_MT_POSITION_Y, 530), syn)
+      }.not_to raise_error
+
+      expect(tuples(output)).not_to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
+    it "does not restart scrolling after scroll mode is disabled" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+      touch_end
+
+      emulator.set_scroll_mode(false)
+      touch_begin(x: 100, y: 200, tracking_id: 20)
+      output = first_scroll_motion
+
+      expect(tuples(output)).not_to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+  end
+
+  describe "#set_scroll_mode" do
+    it "does nothing for a key press and release with no touch motion" do
+      expect(emulator.set_scroll_mode(true)).to eq([])
+      expect(emulator.set_scroll_mode(false)).to eq([])
+    end
+
+    it "defers disabling until the frame boundary when called mid-frame" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      # A frame is in flight (buffered, no SYN yet) when the scroll key is released
+      expect(emulator.process(abs(Revdev::ABS_MT_POSITION_X, 470))).to eq([])
+      expect(emulator.set_scroll_mode(false)).to eq([])
+
+      output = process_frame(abs(Revdev::ABS_MT_POSITION_Y, 540), syn)
+
+      # The buffered first half of the frame is not lost
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_POSITION_X, 470])
+      # The synthetic finger is released after the frame completes
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_TRACKING_ID, -1])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+
+      # No orphaned events remain: the next event passes straight through
+      input_event = abs(Revdev::ABS_MT_POSITION_X, 480)
+      expect(emulator.process(input_event)).to eq([input_event])
+    end
+
+    it "defers enabling until the frame boundary when called mid-frame" do
+      touch_begin
+
+      passthrough_event = abs(Revdev::ABS_MT_POSITION_X, 450)
+      expect(emulator.process(passthrough_event)).to eq([passthrough_event])
+
+      expect(emulator.set_scroll_mode(true)).to eq([])
+
+      # The rest of the current frame still passes through untouched
+      rest_event = abs(Revdev::ABS_MT_POSITION_Y, 520)
+      expect(emulator.process(rest_event)).to eq([rest_event])
+      syn_event = syn
+      expect(emulator.process(syn_event)).to eq([syn_event])
+
+      # From the next frame on, scroll mode is active
+      output = process_frame(
+        abs(Revdev::ABS_MT_POSITION_X, 470),
+        abs(Revdev::ABS_MT_POSITION_Y, 540),
+        syn
+      )
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 1])
+    end
+
+    it "returns a release frame when scroll mode is disabled during an active synthetic touch" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      output = emulator.set_scroll_mode(false)
+
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_TRACKING_ID, -1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_DOUBLETAP, 0])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOOL_FINGER, 1])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOUCH, 1])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+    end
+
+    it "keeps a buffered finger-lift frame intact when disabled mid-frame" do
+      emulator.set_scroll_mode(true)
+      touch_begin
+      first_scroll_motion
+
+      # The finger starts lifting (buffered, no SYN yet) when the scroll key is released
+      buffered_events = [
+        abs(Revdev::ABS_MT_SLOT, 0),
+        abs(Revdev::ABS_MT_TRACKING_ID, -1)
+      ]
+      buffered_events.each { |input_event| expect(emulator.process(input_event)).to eq([]) }
+
+      expect(emulator.set_scroll_mode(false)).to eq([])
+
+      output = process_frame(
+        key(Revdev::BTN_TOUCH, 0),
+        key(Revdev::BTN_TOOL_FINGER, 0),
+        syn
+      )
+
+      # The whole frame is emitted at the boundary, buffered part first
+      expect(tuples(output).first(2)).to eq(tuples(buffered_events))
+      expect(tuples(output)).to include([Revdev::EV_ABS, Revdev::ABS_MT_SLOT, synthetic_slot])
+      expect(tuples(output)).to include([Revdev::EV_KEY, Revdev::BTN_TOUCH, 0])
+      expect(tuples(output).last).to eq([Revdev::EV_SYN, Revdev::SYN_REPORT, 0])
+
+      # Scroll mode is fully off afterwards: events pass straight through
+      input_event = abs(Revdev::ABS_MT_POSITION_X, 480)
+      expect(emulator.process(input_event)).to eq([input_event])
+    end
+  end
+end
