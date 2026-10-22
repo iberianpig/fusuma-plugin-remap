@@ -15,7 +15,8 @@ Gem::Specification.new do |spec|
   spec.homepage = "https://github.com/iberianpig/fusuma-plugin-remap"
   spec.license = "MIT"
 
-  spec.files = Dir["{bin,lib,exe}/**/*", "LICENSE*", "README*", "*.gemspec"]
+  spec.files = Dir["{bin,lib,exe,native}/**/*", "LICENSE*", "README*", "*.gemspec"]
+    .reject { |path| path.start_with?("native/build/") }
   spec.bindir = "exe"
   spec.executables = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]

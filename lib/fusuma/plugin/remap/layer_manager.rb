@@ -94,7 +94,33 @@ module Fusuma
           @merged_layers[layer] ||= merge_all_applicable_mappings(layer)
         end
 
+        # Convert Fusuma remap config into the native binary protocol.
+        # Each entry is [from, kind, to], where to is a pipe-joined sequence.
+        def normalize_mapping(mapping)
+          mapping.map do |key, value|
+            from = normalize_key_combo(key)
+            if value.is_a?(Hash)
+              [from, "swallow", ""]
+            elsif value.is_a?(Array)
+              [from, "seq", value.map { |item| normalize_key_combo(item) }.join("|")]
+            else
+              to = normalize_key_combo(value)
+              kind = (from.include?("+") || to.include?("+")) ? "combo" : "simple"
+              [from, kind, to]
+            end
+          end
+        end
+
         private
+
+        def normalize_key_combo(value)
+          value.to_s.split("+").map { |key| normalize_key_name(key) }.join("+")
+        end
+
+        def normalize_key_name(value)
+          key = value.to_s.strip.upcase
+          key.start_with?("KEY_") ? key.delete_prefix("KEY_") : key
+        end
 
         def merge_all_applicable_mappings(layer)
           mappings = []

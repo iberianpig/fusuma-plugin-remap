@@ -75,8 +75,8 @@ RSpec.describe Fusuma::Plugin::Remap::DeviceMatcher do
         .once
         .and_return([{context: {device: "HHKB"}, remap: {}}])
 
-      matcher.match("HHKB")
-      matcher.match("HHKB")
+      expect(matcher.match("HHKB")).to eq("HHKB")
+      expect(matcher.match("HHKB")).to eq("HHKB")
     end
   end
 end

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**Implemented enhancements:**
+
+- Add an experimental Spinel native keyboard remapper binary with NDJSON control protocol and Ruby fallback.
+- Add native remap core golden tests comparing CRuby and Spinel output.
+
 ## [v0.13.0](https://github.com/iberianpig/fusuma-plugin-remap/tree/v0.13.0) (2026-01-20)
 
 [Full Changelog](https://github.com/iberianpig/fusuma-plugin-remap/compare/v0.12.0...v0.13.0)
